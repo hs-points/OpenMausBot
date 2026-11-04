@@ -1,6 +1,6 @@
 // The full server as a Cloud home over its real HTTP boundary, still sent the OMB_HOSTED_* settings an Admin from before
 // Cloud Pro dropped included AI. Disposable home; no network; a synthetic Claude CLI.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -95,15 +95,17 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
   // The web UI's pages (a stand-in for the built app).
   mkdirSync(join(home, "web"));
   writeFileSync(join(home, "web", "index.html"), "<!doctype html><title>OpenMausBot</title>");
+  writeFileSync(join(home, "vm.json"), "{}");
   const port = await freePortBlock([0, 1]);
   base = `http://127.0.0.1:${port}`;
   const offlinePrelude = `data:text/javascript,${encodeURIComponent('globalThis.fetch = async () => new Response("offline fixture", { status: 503 });')}`;
-  child = spawn(process.execPath, ["--import", offlinePrelude, join(SERVER_DIR, "index.ts")], {
+  child = spawn(process.execPath, ["--import", offlinePrelude, "--import", pathToFileURL(join(SERVER_DIR, "testing/group-local-vm-hooks.mjs")).href, join(SERVER_DIR, "index.ts")], {
     cwd: join(SERVER_DIR, ".."),
     env: {
       PATH: process.env.PATH,
       ...(process.env.PATHEXT ? { PATHEXT: process.env.PATHEXT } : {}),
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      OMB_TEST_VM_STATE: join(home, "vm.json"),
       HOME: home, USERPROFILE: home, OMB_DATA_DIR: dataDir, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1), OMB_STATIC_DIR: join(home, "web"),
       OMB_CLOUD_ROLE: "home", OMB_CLOUD_MACHINE_ID: "3f9c2a4e-8b1d-4c6e-9a7f-2d5e8c1b0a93", OMB_CLOUD_ADMIN_URL: "https://cloud.example.test",
       OMB_CLOUD_BOOTSTRAP_SECRET: secret, OMB_PUBLIC_URL: `https://${HOST}`,
@@ -396,8 +398,8 @@ it("offers its bots the browser and cloud computers only, and tells them they ca
   }
 });
 
-it("refuses a bot still set to this computer or a Local VM, saying what is true on a Cloud home", async () => {
-  for (const computer of ["local", "vm"] as const) {
+it("refuses a bot still set to this computer on a Cloud home", async () => {
+  for (const computer of ["local"] as const) {
     const created = await api("POST", "/api/bots", { body: {
       name: `Earlier ${computer} fixture`, modelSelection: { instanceId: "claude", model: "claude-sonnet-5" }, requireAvailableModel: true,
     } });
@@ -447,4 +449,70 @@ it("tells the Admin's signed health read a failed turn's code, never its words, 
   expect(log).not.toContain("ada.lovelace@example.test");
   expect((await read("W".repeat(43))).status).toBe(401);
   expect((await api("GET", "/api/cloud/health?after=0", { remote: true })).status).toBe(401);
+});
+
+it("runs a Cloud bot on its own Local VM and keeps it selectable", async () => {
+  expect((await api("PATCH", "/api/config", { body: { localVm: { mode: "per-bot", maxInstances: 2 } } })).status).toBe(200);
+  const { body: { bot } } = await api("POST", "/api/bots", { body: { name: "Private VM fixture" } });
+  expect((await api("PATCH", `/api/bots/${bot.id}`, { body: { computer: "vm" } })).status).toBe(200);
+  const dump = join(home, "spawn-hang.json");
+  rmSync(dump, { force: true });
+  writeFileSync(join(home, "hang"), "");
+  try {
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, { body: { text: "Use your own VM." } })).status).toBe(202);
+    await expect.poll(() => existsSync(dump), { timeout: 15_000 }).toBe(true);
+    const { mcpConfig } = JSON.parse(readFileSync(dump, "utf8"));
+    expect(mcpConfig.mcpServers.computer.args.some((arg: string) => arg.includes("container-mcp"))).toBe(true);
+    const agents = mcpConfig.mcpServers.agents;
+    const select = (surface?: string) => fetch(`${base}/api/internal/computer/select`, {
+      method: surface ? "POST" : "GET",
+      headers: { authorization: `Bearer ${agents.env.OMB_COMMS_TOKEN}`, "content-type": "application/json" },
+      ...(surface ? { body: JSON.stringify({ surface }) } : {}),
+    });
+    const listed = await (await select()).json() as { options: Array<{ surface: string; ready: boolean }> };
+    expect(listed.options).toContainEqual(expect.objectContaining({ surface: "vm", ready: true }));
+    expect(listed.options.some(option => option.surface === "local")).toBe(false);
+    expect((await select("vm")).status).toBe(200);
+    expect((await select("local")).status).toBe(409);
+  } finally {
+    rmSync(join(home, "hang"), { force: true });
+    await api("POST", `/api/bots/${bot.id}/interrupt`, { body: {} });
+  }
+});
+
+it.each(["vm", "local"] as const)("routes a Cloud room mention with Works on %s", async computer => {
+  expect((await api("PATCH", "/api/config", { body: { localVm: { mode: "per-bot", maxInstances: 2 } } })).status).toBe(200);
+  const { body: { bot } } = await api("POST", "/api/bots", { body: { name: computer === "vm" ? "Ada" : "Private host" } });
+  expect((await api("PATCH", `/api/bots/${bot.id}`, { body: { computer } })).status).toBe(200);
+  const created = await api("POST", "/api/groups", { body: {
+    name: "Accounting fixture", memberIds: [bot.id], setup: { bulletin: "", defaultResponder: { kind: "mentions" } },
+  } });
+  expect(created.status).toBe(201);
+  const group = created.body.group;
+  const dump = join(home, "spawn-hang.json");
+  rmSync(dump, { force: true });
+  writeFileSync(join(home, "hang"), "");
+  try {
+    expect((await api("POST", `/api/groups/${group.id}/messages`, { body: { text: `@${bot.name} can you reply` } })).status).toBe(202);
+    if (computer === "vm") {
+      await expect.poll(() => existsSync(dump), { timeout: 15_000 }).toBe(true);
+      const { mcpConfig } = JSON.parse(readFileSync(dump, "utf8"));
+      const agents = mcpConfig.mcpServers.agents;
+      expect(agents.env.OMB_BOT_ID).toBe(bot.id);
+      const executed = await fetch(`${base}/api/internal/vm-exec`, {
+        method: "POST", headers: { authorization: `Bearer ${agents.env.OMB_COMMS_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ command: "printf fixture" }),
+      });
+      expect(executed.status).toBe(200);
+      const invocation = JSON.parse(readFileSync(join(home, "vm.json.exec"), "utf8"));
+      expect(invocation.target.key).toBe(`bot:${createHash("sha256").update(bot.id).digest("hex")}`);
+    } else {
+      await expect.poll(async () => JSON.stringify((await api("GET", `/api/threads/${group.threadId}/messages?limit=30`)).body), { timeout: 15_000 })
+        .toContain(cloudHomePlaceRefusal("local"));
+      expect(existsSync(dump)).toBe(false);
+    }
+  } finally {
+    rmSync(join(home, "hang"), { force: true });
+    await api("POST", `/api/groups/${group.id}/interrupt`, { body: {} });
+  }
 });
