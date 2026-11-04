@@ -451,7 +451,6 @@ it("tells the Admin's signed health read a failed turn's code, never its words, 
   expect((await api("GET", "/api/cloud/health?after=0", { remote: true })).status).toBe(401);
 });
 
-
 it("runs a Cloud bot on its own Local VM and keeps it selectable", async () => {
   expect((await api("PATCH", "/api/config", { body: { localVm: { mode: "per-bot", maxInstances: 2 } } })).status).toBe(200);
   const { body: { bot } } = await api("POST", "/api/bots", { body: { name: "Private VM fixture" } });
@@ -482,6 +481,7 @@ it("runs a Cloud bot on its own Local VM and keeps it selectable", async () => {
 });
 
 it.each(["vm", "local"] as const)("routes a Cloud room mention with Works on %s", async computer => {
+  expect((await api("PATCH", "/api/config", { body: { localVm: { mode: "per-bot", maxInstances: 2 } } })).status).toBe(200);
   const { body: { bot } } = await api("POST", "/api/bots", { body: { name: computer === "vm" ? "Ada" : "Private host" } });
   expect((await api("PATCH", `/api/bots/${bot.id}`, { body: { computer } })).status).toBe(200);
   const created = await api("POST", "/api/groups", { body: {
