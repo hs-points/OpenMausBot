@@ -1,10 +1,13 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RequestAuth } from "../request-auth.ts";
-import type { PublicSession, SessionRecord } from "../sessions.ts";
+import { SessionRegistry, type PublicSession, type SessionRecord } from "../sessions.ts";
 import { PASS } from "./table.ts";
-import { createTeamPhoneRoutes, sessionMember, TEAM_PHONE_PAIRING_PATH, TEAM_PHONES_PATH, visiblePhones } from "./team-phone.ts";
+import { createTeamPhoneRoutes, type TeamPhoneRouteDeps, sessionMember, TEAM_PHONE_PAIRING_PATH, TEAM_PHONES_PATH, visiblePhones } from "./team-phone.ts";
 
 const TEAM = { id: "team-acme-1", name: "Acme" };
 const session = (over: Partial<SessionRecord> = {}): SessionRecord => ({
@@ -16,12 +19,12 @@ const asSession = (record: SessionRecord): RequestAuth => ({ kind: "session", sc
 const phone = (id: string, email: string, label: string, createdAt = 2_000): PublicSession => ({ id, label, email, teamRole: "member", scopes: ["client"], createdAt, lastSeenAt: createdAt, expiresAt: 9_000 });
 const PHONES = [phone("ph-cleo", "cleo@acme.test", "Cleo's Pixel"), phone("ph-ada-2", "ada@acme.test", "Ada's iPad", 3_000), phone("ph-ada", "ada@acme.test", "Ada's iPhone")];
 
-function call(team: typeof TEAM | null, auth: RequestAuth, path = TEAM_PHONE_PAIRING_PATH, { live = true, base = "https://acme.example", method = "POST" }: { live?: boolean; base?: string | null; method?: string } = {}) {
+function call(team: typeof TEAM | null, auth: RequestAuth, path = TEAM_PHONE_PAIRING_PATH, { live = true, base = "https://acme.example", method = "POST", sessions }: { live?: boolean; base?: string | null; method?: string; sessions?: TeamPhoneRouteDeps["sessions"] } = {}) {
   const opened: Array<Record<string, unknown>> = [];
   const revoked: string[] = [];
   const route = createTeamPhoneRoutes({
     team,
-    sessions: {
+    sessions: sessions ?? {
       isLive: () => live,
       openPairing: (input) => { opened.push(input as Record<string, unknown>); return { id: "p-1", code: "ABCDEFGHJKLM", credential: `omb_pair_${"a".repeat(43)}`, expiresAt: 5_000 }; },
       memberPhones: () => PHONES.filter((entry) => !revoked.includes(entry.id)),
@@ -38,11 +41,11 @@ function call(team: typeof TEAM | null, auth: RequestAuth, path = TEAM_PHONE_PAI
 describe("Open on your phone, on a Team Cloud", () => {
   it("makes a code for the person signed in: their address, their role's scopes, and the Admin's last check of them", async () => {
     const { opened, answer } = await call(TEAM, asSession(session({ memberCheckedAt: 700 })));
-    expect(opened).toEqual([{ scopes: ["client"], label: "Phone", member: { email: "ada@acme.test", role: "member" }, memberCheckedAt: 700 }]);
+    expect(opened).toEqual([{ scopes: ["client"], label: "Phone", member: { email: "ada@acme.test", role: "member" }, memberCheckedAt: 700, ttlMs: 300_000 }]);
     expect(answer).toMatchObject({ status: 200, body: { code: "ABCD-EFGH-JKLM", url: "https://acme.example/pair#code=ABCD-EFGH-JKLM", serverName: "Acme", team: { id: TEAM.id, name: "Acme", role: "member" } } });
     expect(String(answer!.body.inviteUrl)).toContain("name=Acme");
     const admin = await call(TEAM, asSession(session({ email: "ben@acme.test", teamRole: "admin", scopes: ["admin", "client"] })), "/api/auth/pairing");
-    expect(admin.opened, "an admin's own pairing code carries them too, never a bare admin code").toEqual([{ scopes: ["admin", "client"], label: "Phone", member: { email: "ben@acme.test", role: "admin" }, memberCheckedAt: 1_000 }]);
+    expect(admin.opened, "an admin's own pairing code carries them too, never a bare admin code").toEqual([{ scopes: ["admin", "client"], label: "Phone", member: { email: "ben@acme.test", role: "admin" }, memberCheckedAt: 1_000, ttlMs: 300_000 }]);
   });
 
   it("answers off a team, and for a session the Admin never signed, exactly as before", async () => {
@@ -116,5 +119,59 @@ describe("the phones beside the code, on a Team Cloud", () => {
     const fromLoopback = await call(TEAM, loopback, `${TEAM_PHONES_PATH}/ph-ada`, { method: "DELETE" });
     expect(fromLoopback.answer?.status).toBe(403);
     expect(fromLoopback.revoked).toEqual([]);
+  });
+});
+
+describe("team phone pairing lifetime", () => {
+  let dir: string;
+  let now: number;
+  let registry: SessionRegistry;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "omb-team-pairing-"));
+    now = 1_700_000_000_000;
+    registry = new SessionRegistry({ file: join(dir, "sessions.json"), now: () => now });
+    vi.stubEnv("OMB_TEAM_PAIRING_TTL_S", undefined);
+  });
+  afterEach(() => {
+    registry.close();
+    rmSync(dir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+  });
+
+  async function code(path = TEAM_PHONE_PAIRING_PATH) {
+    const { session: desktop } = registry.issue({ label: "Desktop", scopes: ["client"] });
+    const { answer } = await call(TEAM, asSession(session({ ...desktop, memberCheckedAt: now })), path, { sessions: registry });
+    expect(answer?.status).toBe(200);
+    expect(typeof answer?.body.code).toBe("string");
+    return { code: String(answer?.body.code), expiresAt: answer?.body.expiresAt };
+  }
+  const redeem = (value: string) => registry.exchange({ code: value, label: "Phone", source: "127.0.0.1" });
+
+  it("redeems a 900-second code after ten minutes and expires an unused code after sixteen", async () => {
+    vi.stubEnv("OMB_TEAM_PAIRING_TTL_S", "900");
+    const start = now;
+    const first = await code();
+    const unused = await code();
+    expect(first.expiresAt).toBe(start + 900_000);
+    now = start + 10 * 60_000;
+    expect(redeem(first.code).ok).toBe(true);
+    now = start + 16 * 60_000;
+    expect(redeem(unused.code).ok).toBe(false);
+  });
+
+  it.each([undefined, "", "invalid", "NaN", "Infinity"])("defaults to 300 seconds for %s", async (value) => {
+    vi.stubEnv("OMB_TEAM_PAIRING_TTL_S", value);
+    const start = now;
+    const made = await code();
+    expect(made.expiresAt).toBe(start + 300_000);
+    now = start + 300_000;
+    expect(redeem(made.code).ok).toBe(false);
+  });
+
+  it.each([["0", 60], ["-10", 60], ["59", 60], ["60", 60], ["600", 600], ["900", 900], ["901", 900]])("bounds %s seconds to %i on both pairing routes", async (value, seconds) => {
+    vi.stubEnv("OMB_TEAM_PAIRING_TTL_S", value);
+    for (const path of [TEAM_PHONE_PAIRING_PATH, "/api/auth/pairing"]) {
+      expect((await code(path)).expiresAt).toBe(now + seconds * 1_000);
+    }
   });
 });

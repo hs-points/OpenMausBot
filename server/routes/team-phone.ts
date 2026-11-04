@@ -79,7 +79,9 @@ async function pairing(deps: TeamPhoneRouteDeps, { req, res, path, method, auth,
   if (!deps.sessions.isLive(auth.session.id)) return json(res, 401, { error: "Your session ended. Sign in again before creating a pairing code." });
   const scopes = teamRoleScopes(owner.member.role).filter((scope) => auth.scopes.includes(scope));
   if (!scopes.length) return json(res, 403, { error: `Sign in to ${team.name} in the app first.` });
-  const opened = deps.sessions.openPairing({ scopes, label: PHONE_LABEL, member: owner.member, memberCheckedAt: owner.checkedAt });
+  const configuredTtl = Number(process.env.OMB_TEAM_PAIRING_TTL_S?.trim() || 300);
+  const ttlMs = Math.min(900, Math.max(60, Number.isFinite(configuredTtl) ? configuredTtl : 300)) * 1_000;
+  const opened = deps.sessions.openPairing({ scopes, label: PHONE_LABEL, member: owner.member, memberCheckedAt: owner.checkedAt, ttlMs });
   const base = deps.publicBase(req, auth);
   const code = formatPairingCode(opened.code);
   return json(res, 200, {

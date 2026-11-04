@@ -409,6 +409,12 @@ On a hosted server, the engine CLIs sign in from Settings → Engines:
 
 ## Using it from your computer
 
+For Team Cloud phone pairing, set `OMB_TEAM_PAIRING_TTL_S` in the server
+environment to allow more time on slow connections. The default is 300 seconds.
+Values are clamped to 60–900 seconds; empty or invalid values use the default.
+This applies to member codes from `/api/team/phone-pairing` and
+`/api/auth/pairing`. Other pairing codes keep their existing lifetime.
+
 Pair once, then use the server from any browser on any machine that can
 reach it. On the server:
 
