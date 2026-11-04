@@ -45,7 +45,6 @@ import {
 import { createApprovalModeSupport } from "./harness-capabilities.ts";
 import { escapeAttribute } from "../src/lib/composer-attachments.ts";
 import { isPendingSignInRequest, normalizeSignInSite, signInOutcome, signInResumePrompt } from "../shared/sign-in-request.ts";
-
 import { createRoomTurnLevels } from "./room-turn-level.ts";
 import { createSignInSettle } from "./host/sign-in-settle.ts"; import { createPersonLanguages, THIS_COMPUTER } from "./host/person-languages.ts"; import "./server-line-packs.ts"; import { conversationLanguage, serverLine, setConversationLanguage } from "./server-lines.ts";
 import { RoomMemberLock } from "./room-member-lock.ts";
@@ -1520,8 +1519,8 @@ const managedPolicy = new ManagedDesktopPolicy({ onChange: () => {
   resyncOpenCodeProviderKeys();
 } });
 onKeyRejectionChange(() => { registry.forgetSnapshots(); broadcast({ kind: "config", ...configStatus() }); });
-function computerPlaceRefusal(kind: ComputerKind): { message: string; code: "cloud_home" | "managed_policy" } | undefined {
-  const cloudHome = CLOUD_HOME ? cloudHomePlaceRefusal(kind === "thisComputer" ? "local" : kind === "localVm" ? "vm" : "cloud") : undefined;
+function computerPlaceRefusal(kind: ComputerKind, { ownLocalVm = false } = {}): { message: string; code: "cloud_home" | "managed_policy" } | undefined {
+  const cloudHome = CLOUD_HOME && !(ownLocalVm && kind === "localVm") ? cloudHomePlaceRefusal(kind === "thisComputer" ? "local" : kind === "localVm" ? "vm" : "cloud") : undefined;
   if (cloudHome) return { message: cloudHome, code: "cloud_home" };
   const managed = managedPolicy.computerRefusal(kind);
   return managed ? { message: managed, code: "managed_policy" } : undefined;
@@ -2141,7 +2140,7 @@ function holderOfTurn({ threadId }: TurnOwner): { holder?: ComputerHolder; threa
 
 async function bindTurnComputer(owner: TurnOwner, resource: string, exclusive = false): Promise<void> {
   // Every computer claim passes here, so a disallowed kind is refused whichever path selected it.
-  const kind = computerKindForResource(resource), refusal = kind && computerPlaceRefusal(kind);
+  const kind = computerKindForResource(resource), refusal = kind && computerPlaceRefusal(kind, { ownLocalVm: true });
   if (refusal) throw Object.assign(new Error(refusal.message), { code: refusal.code });
   const active = () => activeInternalGenerationByThread.get(owner.threadId) === owner.generation &&
     turnResourceOwners.get(owner.threadId)?.generation === owner.generation;
@@ -6054,7 +6053,7 @@ async function selectableComputers(bot: BotRecord) {
   const caps = instance?.adapter.capabilities;
   const off = bot.computer === "off";
   const toolsLeaveOut = computerToolsRefusal(bot.toolScope, "works-on", bot.name)?.message;
-  const surfaces = (["cloud", "vm", "local", "browser"] as const).filter(surface => !CLOUD_HOME || cloudHomeOffersPlace(surface));
+  const surfaces = (["cloud", "vm", "local", "browser"] as const).filter(surface => !CLOUD_HOME || cloudHomeOffersPlace(surface) || (surface === "vm" && bot.computer === "vm"));
   let ownDesktopAwaitsUpdate = false;
   return withoutHostWhileUpdating(await Promise.all(surfaces.map(async surface => {
     let ready = false;
@@ -7983,7 +7982,7 @@ async function beginTurn(
       };
       const wantedKind = teamComputer ? "box" : wants === "local" ? "thisComputer" : wants === "vm" ? "localVm"
         : wants === "cloud" ? (cloudBackend === "vps" ? "vps" : "box") : undefined;
-      const placeRefusal = wantedKind && computerPlaceRefusal(wantedKind);
+      const placeRefusal = wantedKind && computerPlaceRefusal(wantedKind, { ownLocalVm: true });
       if (placeRefusal) skipComputer(Object.assign(new Error(placeRefusal.message), { status: 409, code: placeRefusal.code }));
       const namedPlace = teamComputer || wants === undefined || wants === "off" ? undefined : wants;
       const placeSource: PlaceSource | undefined = !namedPlace ? undefined
@@ -9998,7 +9997,7 @@ async function runClaimedGroupMemberTurn(
   });
   const roomKind = roomTeamComputer ? "box" : roomPlan.computer === "local" ? "thisComputer" : readyBot.computer === "vm" ? "localVm"
     : roomPlan.computer === "cloud" ? (turnProvider(readyBot) === "vps" ? "vps" : "box") : undefined;
-  const roomPlaceRefusal = roomKind && computerPlaceRefusal(roomKind);
+  const roomPlaceRefusal = roomKind && computerPlaceRefusal(roomKind, { ownLocalVm: true });
   if (roomPlaceRefusal) throw Object.assign(new Error(roomPlaceRefusal.message), { code: roomPlaceRefusal.code });
   if (!roomTeamComputer && roomPlan.computer === "cloud") {
     const unsupported = cloudPlaceRefusal(cloudEngine(instance, readyBot.modelSelection.model), "room", readyBot.name)
@@ -13038,7 +13037,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (method === "POST" && requested !== "auto" && !parseSurface(requested)) {
           return json(res, 400, { error: "surface must be auto, cloud, vm, local, or browser" });
         }
-        const unoffered = CLOUD_HOME && method === "POST" && requested !== "auto" ? cloudHomePlaceRefusal(parseSurface(requested)!) : undefined;
+        const unoffered = CLOUD_HOME && method === "POST" && requested !== "auto" && !(requested === "vm" && bot.computer === "vm") ? cloudHomePlaceRefusal(parseSurface(requested)!) : undefined;
         const options = await selectableComputers(bot);
         const current = source ? source.mounted ?? "off" : await computerPreviewSurface(bot, bot.threadId);
         requireActiveInternalCapability();
