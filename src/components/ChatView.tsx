@@ -130,6 +130,7 @@ import { useCanWriteIn, useReactor } from "@/lib/cloud-guest";
 import { formattedReplyWidth, isFormattedReply, splitReplyBlocks } from "@/lib/formatted-reply";
 import { otherSpeaker } from "@/lib/own-profile";
 import { latestFailure, latestReply, type TranscriptSnapshot } from "@/lib/transcript-announcer";
+import { withoutRecordedCallText } from "@/lib/call-record";
 import { pendingApprovals } from "./PendingApproval";
 import { TranscriptAnnouncer } from "./TranscriptAnnouncer";
 import { JumpToLatestButton } from "./JumpToLatestButton";
@@ -854,6 +855,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
 
   const { messages: allMessages, activeLeafId } = bot;
   const messages = useMemo(() => visibleMessages({ messages: allMessages, activeLeafId }), [allMessages, activeLeafId]);
+  const chatMessages = useMemo(() => withoutRecordedCallText(messages), [messages]);
   const lookups = useMemo(() => transcriptLookups(allMessages, messages), [allMessages, messages]);
   const liveTools = useMemo(() => liveToolIds(messages, bot), [messages, bot.busy, bot.turnStartedAt]);
   const recordedRun = useMemo(() => runSteps(messages, liveTools), [messages, liveTools]);
@@ -867,23 +869,10 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
   const lastRunStep = recordedRun.at(-1);
   const showRunCard = useShowRunCard();
 
-  const {
-    scrollRef,
-    transcriptRef,
-    topSentinelRef,
-    transcriptKey,
-    following,
-    windowedMessages,
-    hiddenCount,
-    laterCount,
-    olderPending,
-    showLater,
-    jumpToLatest,
-    scrollHandlers,
-  } = useTranscriptViewport({
+  const viewport = useTranscriptViewport({
     ownerId: bot.id,
     threadId: bot.threadId,
-    messages,
+    messages: chatMessages,
     pinOn: [bot.busy, composerDock.pad],
     hasMore: bot.hasMore,
   });
@@ -892,7 +881,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
     () => [...messages].reverse().find((m) => m.role === "bot" && m.kind === "text")?.id,
     [messages],
   );
-  const unreadDivider = useUnreadDivider({ threadId: bot.threadId, messages, following });
+  const unreadDivider = useUnreadDivider({ threadId: bot.threadId, messages, following: viewport.following });
 
   const bots = useDrawnBots(state.bots);
   const teammates = useTeammates(); const mentionPeers = useMemo(() => [...bots.filter((peer) => peer.id !== bot.id), ...teammates.peers], [bots, bot.id, teammates]);
@@ -974,7 +963,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
   }, [lastMessage?.id, lastMessage?.role, lastMessage?.kind]);
   const teammatesWorking = !advanced && !bot.busy && Boolean(bot.waitingForTeammates);
   const presenceVisible = waiting || popping !== null || teammatesWorking;
-  const lastShownRow = windowedMessages.findLast((message) => !quietRow(message, showToolCalls));
+  const lastShownRow = viewport.windowedMessages.findLast((message) => !quietRow(message, showToolCalls));
   const presenceUnderBubble = Boolean(lastShownRow && isBotTextRow(lastShownRow, bot.id));
   const announcement = useMemo((): TranscriptSnapshot => {
     const approval = pendingApprovals(messages)[0];
@@ -1161,14 +1150,14 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
       </GlassBar>
 
       <div
-        ref={scrollRef}
+        ref={viewport.scrollRef}
         className="glass-scroller h-full overflow-x-hidden overflow-y-auto overscroll-y-contain px-5 [overflow-anchor:none]"
         // Simple mode's composer sits on plain canvas, so a row scrolled into view stops clear of it.
         style={advanced ? undefined : { scrollPaddingBottom: composerDock.pad }}
-        {...scrollHandlers}
+        {...viewport.scrollHandlers}
       >
         <div
-          ref={transcriptRef}
+          ref={viewport.transcriptRef}
           // Simple mode spaces groups 16px apart, Advanced 12px.
           data-simple-rows={advanced ? undefined : ""}
           className="glass-scroller-content chat-column relative flex w-full flex-col gap-3 data-[simple-rows]:gap-4"
@@ -1179,18 +1168,18 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
           aria-live="off"
           aria-label={t("chat.conversationWith", { name: bot.name })}
         >
-          {olderPending ? (
+          {viewport.olderPending ? (
             <div className="flex items-center justify-center gap-2 py-3 text-xs text-ink-tertiary">
               <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
               <span>{t("chat.loadingEarlier")}</span>
             </div>
-          ) : hiddenCount > 0 || bot.hasMore ? (
-            <div ref={topSentinelRef} className="h-2 w-full pointer-events-none" aria-hidden="true" />
+          ) : viewport.hiddenCount > 0 || bot.hasMore ? (
+            <div ref={viewport.topSentinelRef} className="h-2 w-full pointer-events-none" aria-hidden="true" />
           ) : null}
-          {windowedMessages.length === 0 && !bot.busy && <EmptyChat bot={bot} />}
+          {viewport.windowedMessages.length === 0 && !bot.busy && <EmptyChat bot={bot} />}
           <ChatRowsContext.Provider value={rows}>
             <MessagesList
-              messages={windowedMessages}
+              messages={viewport.windowedMessages}
               transcript={messages}
               lookups={lookups}
               place={place}
@@ -1211,13 +1200,13 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
             />
           </ChatRowsContext.Provider>
           {stopNoticeDue(messages, stoppedAt, busy) && <CancelledTurnRow name={PERSON_STOPPED_TURN_NAME} />}
-          {laterCount > 0 && (
+          {viewport.laterCount > 0 && (
             <div className="flex justify-center">
               <button
-                onClick={showLater}
+                onClick={viewport.showLater}
                 className="ui-pill"
               >
-                {t("chat.showLater", { count: laterCount })}
+                {t("chat.showLater", { count: viewport.laterCount })}
               </button>
             </div>
           )}
@@ -1253,17 +1242,17 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
         </div>
       </div>
 
-      <TranscriptAnnouncer threadKey={transcriptKey} snapshot={announcement} />
+      <TranscriptAnnouncer threadKey={viewport.transcriptKey} snapshot={announcement} />
 
       <div ref={composerDockRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-[2] chat-column-dock">
-      {advanced && lastRunStep && showRun(recordedRun) && showRunCard && runDismissed.get(transcriptKey) !== lastRunStep.id && (
+      {advanced && lastRunStep && showRun(recordedRun) && showRunCard && runDismissed.get(viewport.transcriptKey) !== lastRunStep.id && (
         <div className="flex justify-end px-5 pb-2">
           <VerifyCard
-            key={transcriptKey}
+            key={viewport.transcriptKey}
             steps={recordedRun}
             canSave={canSaveRun}
             skill={runSkill(messages, recordedRun)}
-            onDismiss={() => setRunDismissed((current) => new Map(current).set(transcriptKey, lastRunStep.id))}
+            onDismiss={() => setRunDismissed((current) => new Map(current).set(viewport.transcriptKey, lastRunStep.id))}
             onSave={() => {
               appendComposerDraft(`bot:${bot.id}:${bot.threadId}`, skillPrompt(recordedRun, askText(messages)));
               composerDockRef.current?.querySelector("textarea")?.focus();
@@ -1271,9 +1260,9 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
           />
         </div>
       )}
-      {!following && (
+      {!viewport.following && (
         <div className="relative">
-          <JumpToLatestButton onClick={jumpToLatest} className="pointer-events-auto bottom-2" />
+          <JumpToLatestButton onClick={viewport.jumpToLatest} className="pointer-events-auto bottom-2" />
         </div>
       )}
       <LiveCallBar bot={bot} />
@@ -1295,7 +1284,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
       {canWrite !== false && (
       <CitationSelectionToolbar
         key={`${bot.id}:${bot.threadId}`}
-        viewportRef={scrollRef}
+        viewportRef={viewport.scrollRef}
         onAdd={(citation) => appendDraftAttachments(`bot:${citation.source.ownerId}:${citation.source.threadId}`, [citation])}
       />
       )}
