@@ -112,7 +112,7 @@ describe("Simple-mode sidebar layout", () => {
     expect(sectionOrder(tree)).toEqual([BOTS_SECTION_ID, CHANNELS_SECTION_ID, userSectionId("Work")]);
     expect(listedBots(tree)).toEqual(["atlas", "bea", "dodo"]);
     const lines = headers(tree);
-    expect(lines.map((header) => [header.props.name, header.props.line, header.props.count])).toEqual([["Group chats", true, 1], ["Work", true, 1]]);
+    expect(lines.map((header) => [header.props.name, header.props.line, header.props.count])).toEqual([["Channels", true, 1], ["Work", true, 1]]);
     expect(lines[0]!.props.onMenu).toBeUndefined();
     expect(lines[1]!.props.onDelete).toBeUndefined();
     expect(lines[1]!.props.onMenu).toBeTypeOf("function");
@@ -128,7 +128,7 @@ describe("Simple-mode sidebar layout", () => {
     expect(grid.pinned.map((candidate) => candidate.id)).toEqual(["atlas", "dodo"]);
     expect(sectionOrder(tree)).toEqual([BOTS_SECTION_ID, CHANNELS_SECTION_ID, userSectionId("Work")]);
     expect(listedBots(tree)).toEqual(["bea"]);
-    expect(headers(tree).map((header) => header.props.name)).toEqual(["Group chats", "Work"]);
+    expect(headers(tree).map((header) => header.props.name)).toEqual(["Channels", "Work"]);
   });
 
   it("fades the list's edges in both modes, with the top buttons and the tiles fixed above it", () => {
@@ -174,7 +174,7 @@ describe("Simple-mode sidebar layout", () => {
   it("still offers Add bots under an empty team", () => {
     fixture.state = { ...fixture.state, sections: ["Work", "Empty"] };
     const { tree } = render();
-    expect(headers(tree).map((header) => header.props.name)).toEqual(["Group chats", "Work", "Empty"]);
+    expect(headers(tree).map((header) => header.props.name)).toEqual(["Channels", "Work", "Empty"]);
     expect(labelled(tree, "Add bots to Empty")).toBe(true);
     expect(labelled(tree, "Add or remove bots in Work")).toBe(false);
   });
@@ -184,7 +184,7 @@ describe("Simple-mode sidebar layout", () => {
     const { tree } = render();
     expect(sectionOrder(tree)).toEqual([CHANNELS_SECTION_ID, BOTS_SECTION_ID, userSectionId("Work")]);
     const all = headers(tree);
-    expect(all.map((header) => header.props.name)).toEqual(["Group chats", "Bots", "Work"]);
+    expect(all.map((header) => header.props.name)).toEqual(["Channels", "Bots", "Work"]);
     for (const header of all) {
       expect(header.props.line).toBe(false);
       expect(header.props.onMenu).toBeUndefined();
@@ -222,12 +222,12 @@ describe("Simple-mode sidebar layout", () => {
   });
 
   it("moves group chats above the bots, which then get their own heading, and leaves Advanced's order alone", () => {
-    const chats = () => headers(render().tree).find((header) => header.props.name === "Group chats")!;
+    const chats = () => headers(render().tree).find((header) => header.props.name === "Channels")!;
     expect(chats().props.reorderable).toBe(true);
     chats().props.onMove!(-1);
     const { tree } = render();
     expect(sectionOrder(tree)).toEqual([CHANNELS_SECTION_ID, BOTS_SECTION_ID, userSectionId("Work")]);
-    expect(headers(tree).map((header) => header.props.name)).toEqual(["Group chats", "Bots", "Work"]);
+    expect(headers(tree).map((header) => header.props.name)).toEqual(["Channels", "Bots", "Work"]);
     expect(listedBots(tree)).toEqual(["atlas", "bea", "dodo"]);
     expect(fixture.storage.get(SIDEBAR_SECTION_ORDER_KEY)).toBeUndefined();
   });

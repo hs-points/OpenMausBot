@@ -1713,7 +1713,6 @@
   "sidebar.preview.signedOut": "{name} не выполнен вход",
   "sidebar.preview.you": "Вы: {text}",
   "sidebar.section.pinned": "Закреплённые",
-  "sidebar.section.channels": "Групповые чаты",
   "sidebar.section.botChats": "Потоки ботов",
   "sidebar.section.bots": "Боты",
   "sidebar.section.moved": "{name} перемещён на позицию {position} из {count}",

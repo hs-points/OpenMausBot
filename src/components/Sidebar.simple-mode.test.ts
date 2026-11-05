@@ -83,11 +83,11 @@ describe("bot-first sidebar", () => {
   });
 
   it.each([
-    { advanced: true, enabled: true, density: "comfortable", size: 32, spacing: ["gap-2", "py-2", "pl-6"] },
-    { advanced: true, enabled: true, density: "icons", size: 44, spacing: ["justify-center", "px-1", "py-1.5"] },
-    { advanced: true, enabled: false, density: "comfortable", size: 44, spacing: ["gap-3", "py-2", "pl-2.5", "pr-9"] },
-    { advanced: false, enabled: false, density: "comfortable", size: 42, spacing: ["gap-2", "rounded-[10px]", "pl-2", "pr-2", "md:h-[54px]"] },
-    { advanced: false, enabled: false, density: "icons", size: 36, spacing: ["h-[54px]", "justify-center"] },
+    { advanced: true, enabled: true, density: "comfortable", size: 18, spacing: ["gap-2", "py-2", "pl-6"] },
+    { advanced: true, enabled: true, density: "icons", size: 22, spacing: ["justify-center", "px-1", "py-1.5"] },
+    { advanced: true, enabled: false, density: "comfortable", size: 18, spacing: ["gap-3", "py-2", "pl-2.5", "pr-9"] },
+    { advanced: false, enabled: false, density: "comfortable", size: 18, spacing: ["gap-2", "rounded-[10px]", "pl-2", "pr-2", "md:h-[54px]"] },
+    { advanced: false, enabled: false, density: "icons", size: 22, spacing: ["h-[54px]", "justify-center"] },
   ] as const)("sizes bot portraits and row spacing in $density density with threads $enabled (advanced $advanced)", ({ advanced, enabled, density, size, spacing }) => {
     fixture.advanced = advanced;
     fixture.showThreads = enabled;
@@ -97,11 +97,8 @@ describe("bot-first sidebar", () => {
       const markup = renderToStaticMarkup(createElement(Capture));
       const row = findElement(tree, "data-sidebar-bot-row", bot.id)!;
       expect(String(row.props.className).split(" ")).toEqual(expect.arrayContaining([...spacing]));
-      expect(markup).toContain(avatar.avatarUrl
-        ? `width="${size}" height="${size}"`
-        : `width="${size}px" height="${size}px"`);
-      // Simple draws its mascot larger than the 36px it takes in the row, so the text stays where it was.
-      if (!advanced && density === "comfortable") expect(markup).toContain('<span class="relative flex shrink-0 -m-[3px]">');
+      expect(markup).toContain(`width="${size}" height="${size}" viewBox="0 0 256 260"`);
+      expect(markup).not.toContain("/api/attachments/portrait.png");
     }
   });
 
@@ -125,12 +122,12 @@ describe("bot-first sidebar", () => {
     });
   }
 
-  it.each([false, true])("uses 14px medium names in Simple comfortable rows and keeps 15px semibold otherwise (advanced %s)", (advanced) => {
+  it.each([false, true])("matches the People name size and weight (advanced %s)", (advanced) => {
     fixture.advanced = advanced;
     fixture.showThreads = false;
     const markup = renderToStaticMarkup(createElement(BotListItem, rowProps("comfortable", { ...bot, tasks: [], projects: [] })));
     const name = markup.match(/<span class="flex min-w-0 grow items-center gap-1\.5 truncate text-ink ([^"]*)"/)?.[1];
-    expect(name).toBe(advanced ? "text-[15px] font-semibold leading-5" : "text-[14px] font-medium leading-5");
+    expect(name).toBe("text-[13px] font-normal leading-5");
     expect(markup).toContain("truncate text-[13px] leading-[18px]");
   });
 
@@ -286,11 +283,11 @@ describe("bot-first sidebar", () => {
   });
 
   it.each([
-    { advanced: false, density: "comfortable", face: 36, spacing: ["gap-2", "rounded-[10px]", "pl-2", "pr-2", "md:h-[54px]"], name: "font-medium", preview: "text-[13px]" },
-    { advanced: false, density: "icons", face: 36, spacing: ["h-[54px]", "justify-center"], name: "font-semibold", preview: "text-[11px]" },
-    { advanced: true, density: "icons", face: 44, spacing: ["justify-center", "px-1", "py-1.5"], name: "font-semibold", preview: "text-[11px]" },
-    { advanced: true, density: "comfortable", face: 32, spacing: ["gap-2", "py-1.5", "pl-6", "pr-9"], name: "font-semibold", preview: "text-[11px]" },
-  ] as const)("sizes group chat rows in $density density (advanced $advanced)", ({ advanced, density, face, spacing, name, preview }) => {
+    { advanced: false, density: "comfortable", spacing: ["gap-2", "rounded-[10px]", "pl-2", "pr-2", "md:h-[54px]"], name: "font-medium", preview: "text-[13px]" },
+    { advanced: false, density: "icons", spacing: ["h-[54px]", "justify-center"], name: "font-semibold", preview: "text-[11px]" },
+    { advanced: true, density: "icons", spacing: ["justify-center", "px-1", "py-1.5"], name: "font-semibold", preview: "text-[11px]" },
+    { advanced: true, density: "comfortable", spacing: ["gap-2", "py-1.5", "pl-6", "pr-9"], name: "font-semibold", preview: "text-[11px]" },
+  ] as const)("sizes group chat rows in $density density (advanced $advanced)", ({ advanced, density, spacing, name, preview }) => {
     fixture.advanced = advanced;
     const group: Group = { id: "room", threadId: "room-thread", name: "Launch", memberIds: [bot.id], messages: [], defaultResponder: { kind: "mentions" }, bulletin: "", unread: false, createdAt: 1 };
     let tree: ReactNode;
@@ -298,7 +295,9 @@ describe("bot-first sidebar", () => {
     const markup = renderToStaticMarkup(createElement(Capture));
     const row = findElement(tree, "data-sidebar-group-row", group.id)!;
     expect(String(row.props.className).split(" ")).toEqual(expect.arrayContaining([...spacing]));
-    expect(markup).toContain(`width="${face}px" height="${face}px"`);
+    expect(markup.split("</button>")[0]).not.toContain("<svg");
+    expect(markup.split("</button>")[0]).not.toContain("<img");
+    expect(markup).toContain(">Launch<");
     expect(markup).toMatch(new RegExp(`truncate text-\\[14px\\] text-ink ${name}`));
     expect(markup).toContain(`truncate text-ink-secondary ${preview}`);
   });

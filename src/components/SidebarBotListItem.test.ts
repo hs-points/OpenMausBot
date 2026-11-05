@@ -288,17 +288,18 @@ describe("BotListItem", () => {
   });
 
   it("gives the Chief of Staff the same row as every other bot", () => {
-    const portrait = (markup: string) => /width="(\d+)px" height="\d+px"/.exec(markup)?.[1];
+    const portrait = (markup: string) => /width="(\d+)" height="\d+" viewBox="0 0 256 260"/.exec(markup)?.[1];
     const rowClass = (markup: string) => /data-sidebar-bot-row="atlas" class="([^"]*)"/.exec(markup)?.[1];
     const chief = renderRow(bot({ chiefOfStaff: true, title: "Chief of staff" }));
     const plain = renderRow(bot({ title: "Developer" }));
-    expect(portrait(chief)).toBe(portrait(plain));
+    expect(portrait(chief)).toBe("18");
+    expect(portrait(plain)).toBe("18");
     expect(rowClass(chief)).toBe(rowClass(plain));
   });
 
-  it("reads the name at 15px semibold and the preview at 13px", () => {
+  it("reads the name and preview at 13px", () => {
     const markup = renderRow(bot({ messages: [{ id: "b1", role: "bot", kind: "text", text: "All set.", at: 1 }] as Bot["messages"] }));
-    expect(markup).toMatch(/class="[^"]*text-\[15px\] font-semibold[^"]*"/);
+    expect(markup).toMatch(/class="[^"]*text-\[13px\] font-normal[^"]*"/);
     expect(markup).toMatch(/class="[^"]*truncate text-\[13px\][^"]*text-ink-secondary[^"]*"/);
   });
 
