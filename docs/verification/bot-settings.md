@@ -221,3 +221,34 @@ Undo then succeeded and recorded the exact prior text, proving the current
 history revision was retained too. A fake key-shaped prior version showed
 the unavailable-restore explanation without an Undo button; safe rows kept
 their buttons. The dedicated tab and fixture were closed afterward.
+
+## Explicit audience pairs
+
+In a disposable workspace, open each bot's Permissions and select the other
+under **Paired bots**. The first selection reads **Waiting for other bot**.
+After both selections, each reads **Mutual**. Both audiences may receive the
+work and replies the pair exchanges. The sender's allowed-peer list still
+applies, and hidden bots remain unreachable. Pairing does not grant admin
+or Chief authority.
+
+Only the workspace owner or an admin can edit pairs. Team members cannot
+change them, even with edit access to the bot. The member's bot response
+omits the pair list. Under `OMB_LOOPBACK_TRUST=service`, a running bot's
+unauthenticated local API request cannot grant itself a pair, including
+requests with forged browser headers. A reply is withheld if either side
+removes the pair during work.
+
+Run these checks against isolated fake-engine servers:
+
+```sh
+pnpm exec vitest run server/peer-roster.test.ts server/admin-activity.test.ts src/components/bot-settings/PermissionsSection.test.ts
+pnpm exec vitest run server/direct-coordination.e2e.test.ts -t 'audience pairs|paired result'
+pnpm exec vitest run server/cloud-team-admin.e2e.test.ts server/peer-allowlist.e2e.test.ts
+```
+
+The coordination fixture calls the mounted `coordinate_bots` tool in both
+directions. It covers mutual, one-sided, unpaired and revoked pairs, and
+revocation by either side during work. The Team fixture uses signed owner,
+admin and member sessions with `OMB_CLOUD_ROLE=team` and service loopback
+trust. The renderer test covers selection, revocation and status labels.
+These fixtures do not prove real-model execution or browser interaction.

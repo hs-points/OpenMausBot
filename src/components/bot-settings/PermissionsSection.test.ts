@@ -5,7 +5,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot } from "@/state/store";
 
-vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => false }));
+const viewer = vi.hoisted(() => ({ ownerOrAdmin: false as boolean | null }));
+vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => viewer.ownerOrAdmin }));
 
 const { BotEditorStore, initialState } = await import("@/state/store");
 const { PermissionsSection } = await import("./PermissionsSection");
@@ -44,6 +45,7 @@ const dialogs = () => document.querySelectorAll('[role="alertdialog"], [role="di
 
 beforeEach(() => {
   dispatch.mockReset();
+  viewer.ownerOrAdmin = false;
   vi.stubGlobal("fetch", () => new Promise(() => {}));
   host = document.createElement("div");
   document.body.append(host);
@@ -126,5 +128,32 @@ describe("who a bot talks to", () => {
     render({ ...base, peers: [] }, false, [quill]);
     expect(host.textContent).toContain("Set up not to talk to other bots.");
     expect(button()).toBeDefined();
+  });
+});
+
+describe("paired bots", () => {
+  const quill: Bot = { ...base, id: "quill", name: "Quill", pairedPeers: [base.id] };
+  const pairInput = () => [...host.querySelectorAll("label")].find(label => label.textContent?.includes("Quill"))?.querySelector("input");
+  it.each([false, null])("hides pair settings from a member or unknown viewer (%s)", allowed => {
+    viewer.ownerOrAdmin = allowed;
+    render(base, false, [quill]);
+    expect(host.textContent).not.toContain("Paired bots");
+    expect(pairInput()).toBeUndefined();
+  });
+  it("lets an admin select and revoke a reciprocal pair", () => {
+    viewer.ownerOrAdmin = true;
+    render(base, false, [quill]);
+    expect(host.textContent).toContain("Both audiences may receive the work and replies they exchange.");
+    flushSync(() => pairInput()!.click());
+    expect(dispatch).toHaveBeenLastCalledWith({ type: "updateBot", botId: base.id, patch: { pairedPeers: [quill.id] } });
+    render({ ...base, pairedPeers: [quill.id] }, false, [quill]);
+    expect(host.textContent).toContain("Mutual");
+    flushSync(() => pairInput()!.click());
+    expect(dispatch).toHaveBeenLastCalledWith({ type: "updateBot", botId: base.id, patch: { pairedPeers: [] } });
+  });
+  it("shows a one-sided selection as waiting", () => {
+    viewer.ownerOrAdmin = true;
+    render({ ...base, pairedPeers: [quill.id] }, false, [{ ...quill, pairedPeers: [] }]);
+    expect(host.textContent).toContain("Waiting for other bot");
   });
 });

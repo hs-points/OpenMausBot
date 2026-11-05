@@ -499,3 +499,24 @@ describe("peer allow-list", () => {
     }
   }, 60_000);
 });
+
+
+it("refuses audience-pair grants from a running bot even with a forged Origin", async () => {
+  const held = await createBot("Held pair grant", "stuck");
+  const peer = await createBot("Pair target", "plain");
+  try {
+    expect((await api("POST", `/api/bots/${held.id}/messages`, { text: "hold" })).status).toBe(202);
+    await expect.poll(() => botBusy(held.id), { timeout: 20_000 }).toBe(true);
+    for (const headers of [{}, { origin: base }] as Record<string, string>[]) {
+      const refused = await api("PATCH", `/api/bots/${held.id}`, { pairedPeers: [peer.id] }, headers);
+      expect(refused.status).toBe(409);
+      expect(String(refused.body.error)).toContain("paired Full-access session");
+    }
+    expect((await api("PATCH", `/api/bots/${held.id}`, { pairedPeers: [] })).status).toBe(200);
+  } finally {
+    for (const bot of [held, peer]) {
+      await api("POST", `/api/bots/${bot.id}/interrupt`, {});
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  }
+}, 45_000);

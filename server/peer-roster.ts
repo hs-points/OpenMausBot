@@ -16,6 +16,7 @@ export interface RosterMember extends Pick<DefaultBotFields, "defaultBot"> {
   reportsTo?: string;
   /** Unset: every visible bot; a list narrows to those ids; [] cuts the bot off from peers. */
   peers?: string[];
+  pairedPeers?: string[];
   activity?: BotActivity;
   visibility?: unknown;
 }
@@ -94,17 +95,19 @@ export function peerStatusWords(status: PeerStatus): string {
 
 /** Only the sender's list counts: reading the target's would let a bot refuse work from its own Chief. */
 export const peerAllowed = (
-  from: { peers?: string[]; visibility?: unknown },
-  target: string | { id: string; visibility?: unknown },
+  from: { id?: string; peers?: string[]; pairedPeers?: string[]; visibility?: unknown },
+  target: string | { id: string; pairedPeers?: string[]; visibility?: unknown },
 ): boolean => {
   const targetId = typeof target === "string" ? target : target.id;
   if (Array.isArray(from.peers) && !from.peers.includes(targetId)) return false;
-  // Same audience too: a teammate others can see would carry this bot's words to people who cannot see it.
-  return typeof target === "string" || sameAudience(from.visibility, target.visibility);
+  // Crossing audiences requires an explicit reciprocal admin grant.
+  return typeof target === "string" || sameAudience(from.visibility, target.visibility) ||
+    (typeof from.id === "string" && Array.isArray(from.pairedPeers) && from.pairedPeers.includes(target.id) &&
+      Array.isArray(target.pairedPeers) && target.pairedPeers.includes(from.id));
 };
 
 /** Departments are folders, not walls: any bot reaches any other visible bot, a Chief someone owns included. Only the
- * sender's own peers list and the bots' audiences narrow it, and reaching a bot grants no authority over it. */
+ * sender's own peers list and the bots' audiences (unless explicitly paired) narrow it. Reach grants no authority. */
 export function canReach(from: RosterMember, target: RosterMember): boolean {
   return from.id !== target.id && !target.hidden && peerAllowed(from, target);
 }

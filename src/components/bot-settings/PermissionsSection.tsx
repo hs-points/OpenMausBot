@@ -127,6 +127,27 @@ export function PermissionsSection({
           onOpen={() => patch({ peers: null, acknowledgePeerScope: true })} />}
       </div>}
 
+      {shows("peers") && !draft && ownerOrAdmin === true && <div className="rounded-xl bg-card p-4">
+        <div className="text-[15px] font-medium text-ink">{t("permissions.pairs.title")}</div>
+        <p className="mt-1 text-[13px] text-ink-secondary">
+          {t("permissions.pairs.help")}
+        </p>
+        <div className="mt-3 flex flex-col gap-2">
+          {state.bots.filter(peer => peer.id !== bot.id && !peer.hidden).map(peer => (
+            <label key={peer.id} className="flex items-center gap-2 text-[13px] text-ink">
+              <input type="checkbox" checked={bot.pairedPeers?.includes(peer.id) ?? false}
+                onChange={event => patch({ pairedPeers: event.target.checked
+                  ? [...(bot.pairedPeers ?? []), peer.id]
+                  : (bot.pairedPeers ?? []).filter(id => id !== peer.id) })} />
+              {peer.name}
+              {bot.pairedPeers?.includes(peer.id) && <span className="text-ink-secondary">
+                {t(peer.pairedPeers?.includes(bot.id) ? "permissions.pairs.mutual" : "permissions.pairs.waiting")}
+              </span>}
+            </label>
+          ))}
+        </div>
+      </div>}
+
       {shows("approval") && <div className="rounded-xl bg-card p-4">
         <div className="text-[15px] font-medium text-ink">{t("permissions.approval.title")}</div>
         <div className="mt-0.5 text-[13px] text-ink-secondary">

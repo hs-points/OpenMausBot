@@ -327,6 +327,7 @@ export interface Bot extends DefaultBotFields, Pick<WireBot, "mascotFaceColor" |
   createdBy?: string; reportsTo?: string;
   approvePeerComms?: boolean;
   peers?: string[];
+  pairedPeers?: string[];
   composio?: boolean;
   connectorTools?: Record<string, ConnectorToolGrant>;
   connectorScopes?: { apps: Record<string, "read" | "write"> }; phoneApps?: import("../../shared/phone-apps").PhoneApps;

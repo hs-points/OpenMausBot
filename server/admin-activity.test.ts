@@ -252,3 +252,13 @@ describe("the Activity view", () => {
     expect(csv).toContain(",'=cmd|' /C calc'!A0,");
   });
 });
+
+
+it("audits audience-pair grants and revocation", () => {
+  const before = botAuditSnapshot({ pairedPeers: ["peer"] });
+  const after = botAuditSnapshot({ pairedPeers: [] });
+  expect(botChangeRows({ id: "bot" }, before, after)).toEqual([
+    { category: "bot", action: "bot.update", target: { kind: "bot", id: "bot" },
+      changed: ["pairedPeers"], before: { pairedPeers: ["peer"] }, after: { pairedPeers: [] } },
+  ]);
+});
