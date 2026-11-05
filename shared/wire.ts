@@ -315,6 +315,8 @@ export interface WireBot {
   approvePeerComms?: boolean;
   /** Bot ids this bot is allowed to contact. */
   peers?: string[];
+  /** Owner/admin-selected audience exceptions; effective only when reciprocal. */
+  pairedPeers?: string[];
   /** Whether this bot may use the workspace's connected apps. */
   composio?: boolean;
   /** Which connected-app tools this bot may call, by service slug. Absent

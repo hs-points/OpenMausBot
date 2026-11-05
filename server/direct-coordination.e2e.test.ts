@@ -944,3 +944,42 @@ it("gives a teammate each request once, never also as a bare assistant line", ()
   expect(second.split("REQUEST_SECOND").length - 1).toBe(1);
   expect(second).not.toMatch(/^Assistant: @/m);
 }, { FAKE_CLAUDE_MODE: "dead-session" }), 60_000);
+
+
+it.each(["mutual", "one-sided", "unpaired", "revoked"])("enforces %s audience pairs through coordinate_bots", mode => fixture(async f => {
+  await f.api(`/api/bots/${f.lead.id}`, { visibility: "admins", pairedPeers: mode === "unpaired" ? [] : [f.specialist.id] }, "PATCH");
+  await f.api(`/api/bots/${f.specialist.id}`, { pairedPeers: mode === "mutual" || mode === "revoked" ? [f.lead.id] : [] }, "PATCH");
+  if (mode === "revoked") await f.api(`/api/bots/${f.specialist.id}`, { pairedPeers: [] }, "PATCH");
+  // Exercise both directions in separate ordinary user turns.
+  for (const [sender, recipient] of [[f.lead, f.specialist], [f.specialist, f.lead]]) {
+    f.plan[sender.id] = { steps: [{ tool: "coordinate_bots", arguments: { bot_ids: [recipient.id], message: "Check the synthetic pair fixture" } }], reply: "Pair checked", resumeReply: "Pair result received" };
+    f.plan[recipient.id] = { reply: "Pair fixture verified" };
+    f.save();
+    const before = f.nodes().length;
+    await f.cli("send", "--bot", sender.id, "--task", sender.activeTaskId, "--text", "Check the pair");
+    await f.cli("wait", "--bot", sender.id, "--task", sender.activeTaskId, "--timeout", "30");
+    const added = f.nodes().slice(before).filter((node: { botId: string }) => node.botId === recipient.id);
+    expect(added.length).toBe(mode === "mutual" ? 1 : 0);
+    if (mode === "mutual") {
+      expect(added[0].status).toBe("completed");
+      expect(f.evidence().some((turn: { botId: string }) => turn.botId === sender.id && told(turn).includes("Pair fixture verified"))).toBe(true);
+    }
+  }
+}), 90_000);
+
+
+it("withholds a paired result if either side revokes the pair during work", () => fixture(async f => {
+  await f.api(`/api/bots/${f.lead.id}`, { visibility: "admins", pairedPeers: [f.specialist.id] }, "PATCH");
+  await f.api(`/api/bots/${f.specialist.id}`, { pairedPeers: [f.lead.id] }, "PATCH");
+  f.plan[f.lead.id] = { steps: [{ tool: "coordinate_bots", arguments: { bot_ids: [f.specialist.id], message: "Check the pair" } }], reply: "Assigned", resumeReply: "Checked" };
+  f.plan[f.specialist.id] = { delayMs: 3000, reply: "PRIVATE_PAIRED_RESULT" };
+  f.save();
+  await f.cli("send", "--bot", f.lead.id, "--task", f.lead.activeTaskId, "--text", "Check the pair");
+  await expect.poll(() => f.nodes().find((node: { parentId?: string }) => node.parentId)?.status, { timeout: 15_000 }).toBe("running");
+  await f.api(`/api/bots/${f.specialist.id}`, { pairedPeers: [] }, "PATCH");
+  await f.cli("wait", "--bot", f.lead.id, "--task", f.lead.activeTaskId, "--timeout", "30");
+  expect(f.nodes().find((node: { parentId?: string }) => node.parentId).status).toBe("failed");
+  const resumed = f.evidence().find((turn: { botId: string; resumed?: boolean }) => turn.botId === f.lead.id && turn.resumed);
+  expect(told(resumed)).toContain("Result withheld");
+  expect(JSON.stringify(resumed)).not.toContain("PRIVATE_PAIRED_RESULT");
+}), 45_000);

@@ -548,3 +548,23 @@ describe("live peer roster for coordination briefs", () => {
     expect(block).not.toContain("Ghost");
   });
 });
+
+
+describe("explicit audience pairs", () => {
+  const a: RosterMember = { id: "a", name: "A", visibility: "admins", pairedPeers: ["b"] };
+  const b: RosterMember = { id: "b", name: "B", pairedPeers: ["a"] };
+  it("allows mutual pairs in both directions", () => {
+    expect(canReachPeer(a, b)).toBe(true);
+    expect(canReachPeer(b, a)).toBe(true);
+  });
+  it("blocks one-sided, unpaired and revoked pairs across audiences", () => {
+    expect(canReachPeer(a, { ...b, pairedPeers: undefined })).toBe(false);
+    expect(canReachPeer({ ...a, pairedPeers: [] }, b)).toBe(false);
+    expect(canReachPeer({ ...a, pairedPeers: undefined }, { ...b, pairedPeers: undefined })).toBe(false);
+  });
+  it("preserves peer lists, hidden bots and team boundaries", () => {
+    expect(canReachPeer({ ...a, peers: [] }, b)).toBe(false);
+    expect(canReachPeer(a, { ...b, hidden: true })).toBe(false);
+    expect(canReachPeer(a, { ...b, section: "Elsewhere" })).toBe(false);
+  });
+});

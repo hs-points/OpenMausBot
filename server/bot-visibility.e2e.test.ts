@@ -220,6 +220,22 @@ posixOnly("per-bot visibility on a shared workspace", () => {
     await removeTempDir(home);
   });
 
+  it("lets only owner/admin sessions set pairs and hides pair ids from members", async () => {
+    const path = `/api/bots/${ids.pub}`;
+    expect((await api("PATCH", path, { pairedPeers: [ids.hr] }, BOB)).status).toBe(403);
+    expect((await api("PATCH", path, { pairedPeers: [ids.hr] }, BOSS)).status).toBe(200);
+    const admin = await api("GET", "/api/bots?messages=0", undefined, BOSS);
+    expect(admin.body.bots.find((bot: { id: string }) => bot.id === ids.pub).pairedPeers).toEqual([ids.hr]);
+    const member = await api("GET", "/api/bots?messages=0", undefined, BOB);
+    expect(member.body.bots.find((bot: { id: string }) => bot.id === ids.pub).pairedPeers).toBeUndefined();
+    expect((await api("PATCH", path, { pairedPeers: [] }, BOB)).status).toBe(403);
+    for (const pairedPeers of [null, "bad", [42], [ids.pub], ["missing-bot"]]) {
+      expect((await api("PATCH", path, { pairedPeers }, BOSS)).status).toBe(400);
+    }
+    // The local owner may revoke; visibility and the other bot remain unchanged.
+    expect((await api("PATCH", path, { pairedPeers: [] })).status).toBe(200);
+  });
+
   it("lists only what a member may see, and never who else may", async () => {
     const bob = (await api("GET", "/api/bots?messages=5", undefined, BOB)).body;
     // (the workspace's own starter bot is visible to everyone, like the helpdesk)
