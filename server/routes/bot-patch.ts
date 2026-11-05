@@ -550,6 +550,15 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         }
         patch.peers = nextPeers;
       }
+      if (Object.hasOwn(body, "pairedPeers")) {
+        const parsed = z.array(z.string().min(1).max(128)).max(MAX_WORKSPACE_BOTS).safeParse(body.pairedPeers);
+        if (!parsed.success) return json(res, 400, { error: "pairedPeers must be a list of bot ids" });
+        const ids = [...new Set(parsed.data)];
+        if (ids.some(id => id === existingBot?.id || !store.bot(id))) {
+          return json(res, 400, { error: "pairedPeers must name existing other bots" });
+        }
+        patch.pairedPeers = ids;
+      }
       if (body.managedSections !== undefined) {
         const parsed = z.array(z.string().trim().max(60)).max(100).safeParse(body.managedSections);
         if (!parsed.success) return json(res, 400, { error: "managedSections must be a list of up to 100 department names (60 characters each)" });
@@ -601,9 +610,12 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
       if (Array.isArray(patch.managedSections) && patch.managedSections.some(section => !(existingBot?.managedSections ?? []).includes(section))) {
         loosened.push("managedSections");
       }
-      // A shell can forge an Origin header: new cross-team authority from local scripts only while every bot is idle.
-      if (loosened.includes("managedSections") && auth.kind === "loopback" && !DESKTOP_MANAGED && store.bots.some(bot => bot.busy)) {
-        return json(res, 409, { error: "Stop running bots before granting access to another department, or use the desktop app or a paired Full-access session." });
+      if (Array.isArray(patch.pairedPeers) && patch.pairedPeers.some(id => !(existingBot?.pairedPeers ?? []).includes(id))) {
+        loosened.push("pairedPeers");
+      }
+      // A shell can forge Origin: cross-department or audience grants need idle bots or an authenticated admin.
+      if (loosened.some(field => field === "managedSections" || field === "pairedPeers") && auth.kind === "loopback" && !DESKTOP_MANAGED && store.bots.some(bot => bot.busy)) {
+        return json(res, 409, { error: "Stop running bots before granting access to another department or audience, or use the desktop app or a paired Full-access session." });
       }
       if (body.peers !== undefined && Array.isArray(existingBot?.peers)) {
         const nextPeers = patch.peers;

@@ -1,8 +1,8 @@
 // Who may see a bot on a shared workspace: absent/"everyone", "admins", or { people: [...] } plus admins. Access control,
 // not an approval gate; the owner, a session-less local service and admin sessions see every bot (on a Team Cloud an
 // admin still sees only their own private chats, never another person's: audience.ts). A member sees a room
-// only when they can see every bot in it, and bots reach each other only with the same audience (sameAudience): a room
-// transcript or a delegation would otherwise carry a restricted bot's words to people who cannot see it.
+// only when they can see every bot in it. Bots need the same audience or an explicit reciprocal admin pair:
+// a delegation can carry restricted words to the other audience. Pairing does not widen room visibility.
 import { z } from "zod";
 
 import { accessFromVisibility, entryMatches, higherLevel, sharedLevel, type BotAccess, type BotAccessLevel } from "../shared/bot-access.ts";
@@ -387,7 +387,7 @@ export function memberBot<T extends object>(bot: T, visible: VisibleSet): T {
   if (visible.everything) return visible.member ? withoutServerAlias(bot) : bot;
   const shown = visible.filtersThreads ? withLevel(shownConversations(bot, visible), visible) : bot;
   if (!visible.member) return shown;
-  const { visibility: _visibility, vpsAlias: _vpsAlias, ...rest } = shown as T & { visibility?: unknown; peers?: unknown; vpsAlias?: unknown };
+  const { visibility: _visibility, pairedPeers: _pairedPeers, vpsAlias: _vpsAlias, ...rest } = shown as T & { visibility?: unknown; peers?: unknown; pairedPeers?: unknown; vpsAlias?: unknown };
   const peers = Array.isArray(rest.peers) ? (rest.peers as unknown[]).filter((id): id is string => typeof id === "string" && visible.bot(id)) : undefined;
   return { ...rest, ...(peers ? { peers } : {}) } as T;
 }

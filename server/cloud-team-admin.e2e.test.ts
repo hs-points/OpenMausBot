@@ -45,6 +45,7 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     instances: {
       ...Object.fromEntries(["codex", "cursor", "githubCopilot", "openaiCompat", "qwen", "hermes", "pi"].map((id) => [id, { driver: "not-a-real-driver" }])),
       claude: { driver: "claudeAgent", displayName: "Claude", config: { cli } },
+      stuck: { driver: "claudeAgent", displayName: "Held fixture", config: { cli }, environment: { FAKE_CLAUDE_MODE: "hang" } },
     },
     treg: { key: "treg-key-never-shown" },
     mcpServers: { linear: { type: "http", url: "https://mcp.linear.app/sse?token=query-never-shown", headers: { Authorization: "Bearer header-never-shown" } } },
@@ -59,7 +60,7 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     env: {
       PATH: process.env.PATH, ...(process.env.PATHEXT ? { PATHEXT: process.env.PATHEXT } : {}), ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       HOME: home, USERPROFILE: home, OMB_DATA_DIR: dataDir, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1), OMB_STATIC_DIR: join(home, "web"),
-      OMB_CLOUD_ROLE: "team", OMB_CLOUD_TEAM_ID: TEAM.id, OMB_CLOUD_TEAM_NAME: TEAM.name, OMB_CLOUD_TEAM_LANGUAGE: "de",
+      OMB_LOOPBACK_TRUST: "service", OMB_CLOUD_ROLE: "team", OMB_CLOUD_TEAM_ID: TEAM.id, OMB_CLOUD_TEAM_NAME: TEAM.name, OMB_CLOUD_TEAM_LANGUAGE: "de",
       OMB_CLOUD_MACHINE_ID: "3f9c2a4e-8b1d-4c6e-9a7f-2d5e8c1b0a93", OMB_CLOUD_ADMIN_URL: "https://cloud.example.test", OMB_CLOUD_BOOTSTRAP_SECRET: secret, OMB_PUBLIC_URL: `https://${HOST}`,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -122,3 +123,55 @@ it("an Owner or Admin's paired session (as the Admin holds one) sets a team key 
   const settings = await admin("GET", "/api/config");
   expect([settings.status, settings.body.language]).toEqual([200, "de"]);
 }, 30_000);
+
+it("only Team owners and admins can set audience pairs, including while a bot runs", async () => {
+  const session = async (role: string) => {
+    const granted = await signed("POST", "/api/cloud/pairing", JSON.stringify({ label: "Pair fixture", ttlSeconds: 300, team: TEAM, member: { email: `${role}@acme.test`, role } }));
+    expect(granted.status).toBe(200);
+    const paired = await call("POST", "/api/auth/pair", { body: JSON.stringify({ code: granted.body.code }), headers: { "content-type": "application/json" } });
+    expect(paired.status).toBe(200);
+    return (method: string, path: string, body?: unknown) => call(method, path, {
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      headers: { authorization: `Bearer ${paired.body.token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+    });
+  };
+  const admin = await session("admin"), owner = await session("owner"), member = await session("member");
+  const make = async (name: string) => {
+    const created = await admin("POST", "/api/bots", { name, modelSelection: { instanceId: "stuck", model: "claude-sonnet-5" } });
+    expect(created.status).toBe(201);
+    return created.body.bot as { id: string };
+  };
+  const left = await make("Pair left"), right = await make("Pair right");
+  const path = `/api/bots/${left.id}`;
+  expect((await admin("PUT", `${path}/access`, { everyone: "edit", people: {} })).status).toBe(200);
+  for (const value of [null, "bad", [42], [left.id], ["unknown-bot"]]) {
+    expect((await admin("PATCH", path, { pairedPeers: value })).status).toBe(400);
+  }
+  expect((await admin("PATCH", path, { pairedPeers: [right.id] })).status).toBe(200);
+  expect((await owner("PATCH", `/api/bots/${right.id}`, { pairedPeers: [left.id] })).status).toBe(200);
+  for (const value of [[], [right.id]]) {
+    expect((await member("PATCH", path, { pairedPeers: value })).status).toBe(403);
+  }
+  const memberLeft = (await member("GET", "/api/bots")).body.bots.find((bot: { id: string }) => bot.id === left.id);
+  expect(memberLeft.yourAccess).toBe("edit");
+  expect(memberLeft).not.toHaveProperty("pairedPeers");
+  expect((await admin("GET", "/api/bots")).body.bots.find((bot: { id: string }) => bot.id === left.id).pairedPeers).toEqual([right.id]);
+  expect((await admin("PATCH", path, { pairedPeers: [] })).status).toBe(200);
+  try {
+    expect((await admin("POST", `${path}/messages`, { text: "Hold the synthetic pairing check" })).status).toBe(202);
+    await expect.poll(async () => (await admin("GET", "/api/bots")).body.bots.find((bot: { id: string }) => bot.id === left.id)?.busy, { timeout: 15_000 }).toBe(true);
+    for (const forged of [false, true]) {
+      const refused = await fetch(`${base}${path}`, { method: "PATCH", headers: {
+        "content-type": "application/json", ...(forged ? { origin: base, referer: `${base}/` } : {}),
+      }, body: JSON.stringify({ pairedPeers: [right.id] }) });
+      expect(refused.status).toBe(403);
+    }
+    expect((await admin("GET", "/api/bots")).body.bots.find((bot: { id: string }) => bot.id === left.id).pairedPeers).toEqual([]);
+    expect((await admin("PATCH", path, { pairedPeers: [right.id] })).status).toBe(200);
+    expect((await admin("PATCH", path, { pairedPeers: [] })).status).toBe(200);
+  } finally {
+    await admin("POST", `${path}/interrupt`, {});
+    await admin("DELETE", path);
+    await admin("DELETE", `/api/bots/${right.id}`);
+  }
+}, 45_000);
