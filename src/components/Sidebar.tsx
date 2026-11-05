@@ -8,9 +8,8 @@ import { liveActivityLabel } from "@/lib/live-activity";
 import { SidebarWorkingStep } from "./SidebarWorkingStep";
 import { llmThreadTitlesEnabled } from "@/lib/feature-flags";
 
-import { BotAvatar } from "./Avatar";
+import { CodexMark } from "./ProviderIcons";
 import { BotEngineMark, BotModelBadge, botTooltip } from "./BotModelBadge"; import { SidebarBotRole } from "./BotRole";
-import { stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { searchMatchesThreads, useSearchDisclosure } from "@/lib/search-disclosure";
 import { useHeldMenuMotion, useMenuMotion } from "./MenuMotion";
@@ -22,7 +21,6 @@ import type { LocaleKey } from "@/locales";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { BulkSelectFilters, ThreadListFooter, deleteThreadsInBulk, useBulkSelect } from "./BulkSelectBar";
  
-import { StackedMauses } from "./StackedMauses";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { nextRename } from "@/lib/rename";
 import { useDesktopCapabilities, windowFramed } from "./DesktopCapabilities";
@@ -161,9 +159,6 @@ export function GroupListItem({
   const simpleRow = !advanced && density === "comfortable";
   const railTile = !advanced && density === "icons";
   const roomBusy = Boolean(group.busyBotId) || Boolean(group.working);
-  const members = group.memberIds
-    .map((id) => state.bots.find((b) => b.id === id))
-    .filter((b): b is Bot => Boolean(b));
   const last = group.messages.at(-1);
   return (
     <>
@@ -192,8 +187,7 @@ export function GroupListItem({
       title={density === "icons" ? group.name : undefined}
       aria-label={density === "icons" ? group.name : undefined}
     >
-      <StackedMauses members={members} density={railTile ? "comfortable" : density} large={simpleRow || railTile} />
-      <div className={cn("min-w-0 flex-1", density === "icons" && "hidden")}>
+      <div className={cn("min-w-0 flex-1", density === "icons" && "px-1")}>
         <div className={cn("flex items-baseline justify-between gap-2", simpleRow && "pr-7")}>
           <span className={cn("truncate text-[14px] text-ink", simpleRow ? "font-medium leading-5" : "font-semibold")}>{group.name}</span>
           {advanced && selected && last && !expanded && <span className="shrink-0 text-[10px] text-ink-secondary">{formatTime(last.at)}</span>}
@@ -695,7 +689,7 @@ export function useVisibleMessages(bot: Bot): Message[] {
 
 export const BotListItem = memo(function BotListItem(props: BotRowProps) {
   const advanced = useAdvancedMode();
-  const { bot, selected, deleting, mascotMotion, reveal, pendingQueued, instances, liveCall, density, query, dispatch, onMenu, renameRequest, botDrag: drag, botDrop: drop, botDragging: dragging } = props;
+  const { bot, selected, deleting, reveal, pendingQueued, instances, liveCall, density, query, dispatch, onMenu, renameRequest, botDrag: drag, botDrop: drop, botDragging: dragging } = props;
   const showThreads = useShowThreads();
   const liveMedia = useLiveMedia();
   const remoteClient = typeof window !== "undefined" && window.ogb?.remoteClient?.active === true;
@@ -710,7 +704,7 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
   const simpleRow = !advanced && !showThreads && density === "comfortable";
   const simpleList = !advanced && !iconOnly;
   const railTile = iconOnly && !advanced;
-  const avatarSize = iconOnly ? (railTile ? 36 : 44) : showThreads ? 32 : simpleRow ? 36 : 44;
+  const avatarSize = iconOnly ? 22 : 18;
   const tooltip = simpleList ? botTooltip(bot, instances) : undefined;
   const visible = useVisibleMessages(bot);
   const last = lastNonReceipt(visible);
@@ -731,15 +725,8 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
   const onLiveCall = liveBadgeFor(bot.id, liveMedia, liveCall);
   const body = (
     <>
-      <span className={cn("relative flex shrink-0", simpleRow && "-m-[3px]")} title={iconOnly || simpleList ? undefined : [bot.name, ...details].join(" · ")}>
-        <BotAvatar
-          bot={bot}
-          state={stateForBot({ ...bot, messages: visible })}
-          size={simpleRow ? avatarSize + 6 : avatarSize}
-          motion={mascotMotion?.kind ?? "none"}
-          motionKey={mascotMotion?.nonce ?? 0}
-          animated={working || unread || (mascotMotion?.kind ?? "none") !== "none"}
-        />
+      <span className="relative flex shrink-0" title={iconOnly || simpleList ? undefined : [bot.name, ...details].join(" · ")}>
+        <CodexMark size={avatarSize} />
         {/* Bottom-left, clear of the status dots on the right and of the row's hover actions. */}
         {(iconOnly || !simpleList) && <BotModelBadge bot={bot} instances={instances} avatarSize={avatarSize} />}
         {simpleRow && <AvatarActivityDot activity={working ? "working" : teammateWait ? "teammate" : queued && !waiting ? "queued" : null} />}
@@ -775,7 +762,7 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
       </span>
       <div className={cn("min-w-0 flex-1", iconOnly && "hidden")}>
         <div className={cn("flex items-baseline justify-between gap-2", simpleRow && "pr-7")}>
-          <span className={cn("flex min-w-0 grow items-center gap-1.5 truncate text-ink", simpleRow ? "text-[14px] font-medium leading-5" : "text-[15px] font-semibold leading-5")}>
+          <span className="flex min-w-0 grow items-center gap-1.5 truncate text-ink text-[13px] font-normal leading-5">
             {!simpleList && bot.pinned && <Pin size={12} className="shrink-0 text-ink-secondary" />}
             <RenameTitle
               key={iconOnly ? "icons" : "expanded"}
@@ -793,7 +780,7 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
               }}
               onEditingChange={setRenaming}
               className="truncate"
-              inputClassName={cn("w-full rounded bg-inset px-1 py-0.5", simpleRow ? "text-[14px] font-medium" : "text-[15px] font-semibold")}
+              inputClassName="w-full rounded bg-inset px-1 py-0.5 text-[13px] font-normal"
             />
             {!simpleList && bot.chiefOfStaff && !renaming && (
               <Crown size={13} strokeWidth={2.25} className="shrink-0 text-accent" role="img" aria-label={t("sidebar.bot.chiefOfStaff")} data-testid="chief-crown">

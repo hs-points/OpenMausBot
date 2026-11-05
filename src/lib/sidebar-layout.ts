@@ -57,7 +57,7 @@ export function userSectionName(id: SidebarSectionId): string | null {
 
 export function sidebarSectionLabel(id: SidebarSectionId): string {
   if (id === PINNED_SECTION_ID) return "Pinned";
-  if (id === CHANNELS_SECTION_ID) return "Group chats";
+  if (id === CHANNELS_SECTION_ID) return "Channels";
   if (id === BOT_CHATS_SECTION_ID) return "Bot threads";
   if (id === BOTS_SECTION_ID) return "Bots";
   return userSectionName(id) ?? id;
