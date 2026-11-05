@@ -1550,7 +1550,6 @@
   "sidebar.preview.signedOut": "{name} no tiene la sesión iniciada",
   "sidebar.preview.you": "Tú: {text}",
   "sidebar.section.pinned": "Fijados",
-  "sidebar.section.channels": "Chats de grupo",
   "sidebar.section.botChats": "Hilos entre bots",
   "sidebar.section.bots": "Bots",
   "sidebar.section.moved": "{name} movido a la posición {position} de {count}",
