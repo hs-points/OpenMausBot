@@ -1015,6 +1015,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         // MCP servers start with the thread, before it has an id; this process serves this turn alone.
         if (msg.method === "mcpServer/startupStatus/updated") {
           mcpStartup.record(p);
+          if (p.name === "computer" && p.status === "failed" && selectedMcp.has("computer")) {
+            emit({ ...base(threadId, turnId), type: "runtime.error", message: "The selected computer's screen tools did not connect. This turn has stopped. Check the computer connection, then start a new turn." });
+            void settle(false, "computer_unavailable");
+            return;
+          }
           if (!teamToolsNoticed && teamToolsFailed(p)) {
             teamToolsNoticed = true;
             emit({ ...base(threadId, turnId), type: "runtime.notice", message: TEAM_TOOLS_FAILED });
