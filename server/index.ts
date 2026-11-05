@@ -489,6 +489,7 @@ import type { WebhookTrigger } from "../shared/webhooks.ts";
 import { AGENTS_NODE_FLAG, SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { agentsProxyLaunch, agentsToolBridgeEnv, applyAgentsBridge, bridgedToolTitle, turnEngine } from "./agents-bridge-switch.ts"; import { agentsServerEnv, COMPUTER_OFF_REFUSAL, computerPickRefusal, directTurnKind, roomSkillsRefusal, type TurnKind } from "./agents-turn.ts";
 import { harnessMcpTokenEnv } from "./harness-mcp-token.ts";
+import { localVmComputerRpc } from "./local-vm-computer-tools.ts";
 import {
   loadBundledSkills,
   loadUserSkills,
@@ -1612,6 +1613,7 @@ type InternalCapability = {
   openedThreads: number;
   orphanExpiresAt: number;
   localVmTarget?: LocalVmTarget;
+  localVmConnection?: { runtime: Runtime; target: LocalVmTarget; calls: Promise<void> };
   teamComputerId?: string;
   /** Set only by the harness at attach; null: mounted, and the first call creates or wakes the Boat. */
   boxId?: string | null;
@@ -5842,6 +5844,18 @@ function cloudComputerTools(botId: string, owner: TurnOwner, boxId: string | nul
   };
 }
 
+function localVmComputerTools(runtime: Runtime, control: { url: string; token: string }, target: LocalVmTarget) {
+  if (!botBox.enabled()) return containerComputerMcp(runtime, control, target);
+  const capability = internalCapabilities.get(control.token);
+  if (!capability || capability.kind !== "computer") throw new Error("Local VM computer capability was not created");
+  capability.localVmConnection = { runtime, target, calls: Promise.resolve() };
+  return {
+    command: process.execPath,
+    args: [SPAWNED_PROXIES.harnessMcp, "computer"],
+    env: { ...AGENTS_NODE_FLAG, OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`, [harnessMcpTokenEnv("computer")]: control.token },
+  };
+}
+
 /** `askNow`: read at the first screen call (an Auto pin below Full access, checked live), so the person is asked once then. */
 async function mountHostComputer(owner: TurnOwner, botId: string, providerSupportsLocal: boolean, onRejected: (failure: string, error?: unknown) => void, askNow: () => boolean = () => false, journal = false) {
   if (!shouldMountLocalComputer({ requested: "local", hostPlatform: process.platform, providerSupportsLocal })) {
@@ -8136,7 +8150,7 @@ async function beginTurn(
         }
         try {
           if (lazyReadyVm) {
-            integrations.localComputer = containerComputerMcp(
+            integrations.localComputer = localVmComputerTools(
               lazyReadyVm.runtime,
               controlIntegration(bot.id, threadId, dispatchClaimId),
               localVmTarget,
@@ -8165,7 +8179,7 @@ async function beginTurn(
             return true;
           }
           const claimed = await claimAutoLocalVm(threadId);
-          integrations.localComputer = containerComputerMcp(
+          integrations.localComputer = localVmComputerTools(
             claimed.runtime,
             controlIntegration(bot.id, threadId, dispatchClaimId),
             claimed.target,
@@ -10110,7 +10124,7 @@ async function runClaimedGroupMemberTurn(
       if (owner?.threadId !== threadId || owner.botId !== readyBot.id) {
         throw new Error("the Local VM lease expired while preparing the turn");
       }
-      integrations.localComputer = containerComputerMcp(
+      integrations.localComputer = localVmComputerTools(
         vm.runtime,
         controlIntegration(readyBot.id, threadId, internalGeneration, { localVmTarget: target }),
         target,
@@ -13169,9 +13183,30 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // The turn's capability names its Boat; the Boat credential stays here.
       if (await dispatchRoutes([savedSteps.journalRoutes({ capability: internalCapability, readBody: readInternalBody })], { req, res, url, path, method, auth, json, readBody })) return; if (method === "POST" && path === "/api/internal/computer/mcp") {
         const body = await readInternalBody();
-        if (internalCapability.boxId === undefined) return json(res, 403, { error: "this turn has no cloud computer" });
         const abort = new AbortController();
         res.once("close", () => { if (!res.writableEnded) abort.abort(); });
+        if (internalCapability.localVmConnection) {
+          const connection = internalCapability.localVmConnection;
+          const { runtime, target } = connection;
+          const arrivedAt = Date.now();
+          const perform = () => localVmComputerRpc(body, {
+            server: containerComputerMcp(runtime, undefined, target), signal: abort.signal, arrivedAt,
+            gate: () => computerCallGate(internalCapability, abort.signal),
+            assertActive: requireActiveInternalCapability,
+            assertClaim: () => {
+              const owner = localVmLeaseFor(target).current(localVmOwnerBusy);
+              if (localVmThreadTargets.get(internalCapability.threadId)?.key !== target.key ||
+                  owner?.threadId !== internalCapability.threadId || owner.botId !== internalCapability.botId) {
+                throw Object.assign(new Error("This turn no longer has its Local VM"), { status: 403 });
+              }
+            },
+          });
+          if (body?.method !== "tools/call") return json(res, 200, { result: await perform() });
+          const result = connection.calls.then(perform);
+          connection.calls = result.then(() => {}, () => {});
+          return json(res, 200, { result: await result });
+        }
+        if (internalCapability.boxId === undefined) return json(res, 403, { error: "this turn has no cloud computer" });
         return json(res, 200, { result: await cloudComputerRpc(body, {
           cfg, signal: abort.signal, folder: () => messageFileRootsForThread(internalCapability.botId, internalCapability.threadId)[0],
           boxId: () => internalCapability.boxId ?? claimedBoatId(internalCapability),
