@@ -23,6 +23,7 @@ export interface RosterMember {
    * narrows this bot to exactly those ids, and an empty list cuts it off
    * from peers entirely. */
   peers?: string[];
+  pairedPeers?: string[];
   /** What the harness last saw the bot doing. `busy` alone cannot tell a
    * bot mid-task from one parked on the user's approval card. */
   activity?: BotActivity;
@@ -115,17 +116,20 @@ export function peerStatusWords(status: PeerStatus): string {
  * throwing mid-turn: the list is operator-owned local state, so degrading to
  * the documented default is safer than failing a turn. */
 export const peerAllowed = (
-  from: { peers?: string[]; visibility?: unknown },
-  target: string | { id: string; visibility?: unknown },
+  from: { id?: string; peers?: string[]; pairedPeers?: string[]; visibility?: unknown },
+  target: string | { id: string; pairedPeers?: string[]; visibility?: unknown },
 ): boolean => {
   const targetId = typeof target === "string" ? target : target.id;
   if (Array.isArray(from.peers) && !from.peers.includes(targetId)) return false;
-  // Given the record, also require the same audience: a teammate that other
-  // people can see would carry this bot's words, or bring back a restricted
+  // Given the record, require the same audience unless an owner/admin paired
+  // both bots explicitly. A teammate visible to other people could carry
+  // this bot's words, or bring back a restricted
   // bot's answers, to people who cannot see the other (bot-visibility.ts).
   // Bots nobody restricted all share "everyone", so this changes nothing
   // until an admin restricts one.
-  return typeof target === "string" || sameAudience(from.visibility, target.visibility);
+  return typeof target === "string" || sameAudience(from.visibility, target.visibility) ||
+    (typeof from.id === "string" && Array.isArray(from.pairedPeers) && from.pairedPeers.includes(target.id) &&
+      Array.isArray(target.pairedPeers) && target.pairedPeers.includes(from.id));
 };
 
 export function canReachPeer(from: RosterMember, target: RosterMember): boolean {

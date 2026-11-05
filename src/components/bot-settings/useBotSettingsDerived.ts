@@ -40,6 +40,7 @@ export type BotPatch = Partial<
     | "voice"
     | "chiefOfStaff"
     | "managedSections"
+    | "pairedPeers"
     | "approvePeerComms"
     | "composio"
     | "browser"

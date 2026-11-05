@@ -21,7 +21,8 @@
 // Bots reach each other only when the same people can see both (see
 // sameAudience): an ask or a delegation carries one bot's words into the
 // other's thread, so a teammate with a different audience could surface a
-// restricted bot's answers to people who cannot see it.
+// restricted bot's answers to people who cannot see it. An owner/admin may
+// explicitly authorize that exchange with reciprocal pairedPeers (peer-roster.ts).
 //
 // Pure: no store, no server. server/index.ts supplies the records.
 import { z } from "zod";
@@ -341,7 +342,7 @@ export interface FrameContext {
  * is an admin's business), and no teammate ids the member cannot see. */
 export function memberBot<T extends object>(bot: T, visible: VisibleSet): T {
   if (visible.everything) return bot;
-  const { visibility: _visibility, ...rest } = bot as T & { visibility?: unknown; peers?: unknown };
+  const { visibility: _visibility, pairedPeers: _pairedPeers, ...rest } = bot as T & { visibility?: unknown; peers?: unknown; pairedPeers?: unknown };
   const peers = Array.isArray(rest.peers) ? (rest.peers as unknown[]).filter((id): id is string => typeof id === "string" && visible.bot(id)) : undefined;
   return { ...rest, ...(peers ? { peers } : {}) } as T;
 }

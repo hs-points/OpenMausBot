@@ -131,6 +131,28 @@ export function PermissionsSection({
         />
       </div>
 
+      {!draft && ownerOrAdmin === true && <div className="rounded-xl bg-card p-4">
+        <div className="text-[15px] font-medium text-ink">Paired bots</div>
+        <p className="mt-1 text-[13px] text-ink-secondary">
+          Allow coordination across different audiences. Select this bot in the other bot’s settings too.
+          Both audiences may receive the work and replies they exchange. Team and allowed-peer rules still apply.
+        </p>
+        <div className="mt-3 flex flex-col gap-2">
+          {state.bots.filter(peer => peer.id !== bot.id && !peer.hidden).map(peer => (
+            <label key={peer.id} className="flex items-center gap-2 text-[13px] text-ink">
+              <input type="checkbox" checked={bot.pairedPeers?.includes(peer.id) ?? false}
+                onChange={event => patch({ pairedPeers: event.target.checked
+                  ? [...(bot.pairedPeers ?? []), peer.id]
+                  : (bot.pairedPeers ?? []).filter(id => id !== peer.id) })} />
+              {peer.name}
+              {bot.pairedPeers?.includes(peer.id) && <span className="text-ink-secondary">
+                {peer.pairedPeers?.includes(bot.id) ? "Mutual" : "Waiting for other bot"}
+              </span>}
+            </label>
+          ))}
+        </div>
+      </div>}
+
       <div className="rounded-xl bg-card p-4">
         <div className="text-[15px] font-medium text-ink">Approval level</div>
         <div className="mt-0.5 text-[13px] text-ink-secondary">

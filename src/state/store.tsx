@@ -456,6 +456,7 @@ export interface Bot {
    * `[]` = none. Read-only on the web today; here so the settings dialog can
    * refetch the overview when the server changes it. */
   peers?: string[];
+  pairedPeers?: string[];
   /** Whether this bot may use the workspace's connected apps. Unset means
    * allowed for existing bots; imported bots start with this disabled. */
   composio?: boolean;

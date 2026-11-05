@@ -166,3 +166,33 @@ Undo then succeeded and recorded the exact prior text, proving the current
 history revision was retained too. A fake key-shaped prior version showed
 the unavailable-restore explanation without an Undo button; safe rows kept
 their buttons. The dedicated tab and fixture were closed afterward.
+
+
+## Explicit bot pairs
+
+As the owner or an admin, open an existing bot's **Permissions → Paired bots**.
+Select another bot, then select the first bot in the other's settings. The first
+selection shows **Waiting for other bot**; reciprocal selections show **Mutual**.
+Uncheck either selection to revoke the audience exception. Team boundaries,
+hidden bots, allowed-peer lists, and message approval rules still apply.
+Pairing authorizes the two audiences to receive the work and replies exchanged
+between these bots. It does not change either bot's visibility or room access.
+Member sessions cannot change pairs. Local scripts may add pairs only while
+all bots are idle; a forged browser Origin does not bypass this restriction.
+Pair ids are omitted from restricted
+member responses.
+
+Automated checks use temporary servers and scripted providers:
+
+```sh
+pnpm exec vitest run server/peer-roster.test.ts server/bot-visibility.test.ts server/admin-activity.test.ts
+pnpm exec vitest run server/direct-coordination.e2e.test.ts -t "audience pairs"
+pnpm exec vitest run server/bot-visibility.e2e.test.ts -t "set pairs"
+pnpm exec vitest run server/peer-allowlist.e2e.test.ts -t "refuses audience-pair"
+```
+
+The coordination checks run the real mounted `coordinate_bots` tool in both
+directions. They cover reciprocal, one-sided, absent, and revoked pairs.
+The HTTP check covers owner/admin saves, member refusal, invalid ids, and
+member response redaction. These checks do not prove production deployment
+or real-provider coordination.

@@ -688,6 +688,10 @@ export class Store {
         delete b.autoStartVps;
         botsMigrated = true;
       }
+      if (b.pairedPeers !== undefined && (!Array.isArray(b.pairedPeers) ||
+          b.pairedPeers.some(id => typeof id !== "string"))) {
+        delete b.pairedPeers;
+      }
       if (b.managedSections !== undefined && (!b.chiefOfStaff || !Array.isArray(b.managedSections) ||
           b.managedSections.length > 100 || b.managedSections.some(section => typeof section !== "string" || section.length > 60))) {
         delete b.managedSections;
