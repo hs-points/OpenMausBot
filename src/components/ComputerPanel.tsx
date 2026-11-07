@@ -365,7 +365,8 @@ export function ComputerPanel({
     selectedInstance?.snapshot.state === "available" &&
       selectedInstance.capabilities?.computerMcp,
   );
-  const cloudSupported = canWorkOnCloud(cloudEngineOf(selectedInstance));
+  // A member never sees the engine list (it is admin-only): an engine this view cannot see is left for the server to judge.
+  const cloudSupported = (!selectedInstance && state.instances.length === 0) || canWorkOnCloud(cloudEngineOf(selectedInstance));
   const botRoutines = state.routines
     .filter((routine) => routine.botId === bot.id)
     .sort((a, b) => Number(b.enabled) - Number(a.enabled) || (a.nextRunAt ?? Infinity) - (b.nextRunAt ?? Infinity));

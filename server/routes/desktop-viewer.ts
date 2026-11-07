@@ -43,6 +43,8 @@ export function createDesktopViewer(deps: {
   lease?: (id: string, botId: string, controlLeaseId: string, threadId?: string) => (() => boolean) | undefined;
   /** The server's shared upgrade gate; a viewer made without one keeps its own. */
   upgrades?: Upgrades;
+  /** A non-admin who may still watch this target: on a Team Cloud, a member who can edit the bot whose VPS it is. */
+  mayView?: (auth: RequestAuth, id: string) => boolean;
 }) {
   const upgrades = deps.upgrades ?? createUpgrades();
   const ownGate = deps.upgrades === undefined;
@@ -56,7 +58,7 @@ export function createDesktopViewer(deps: {
     res.setHeader("cache-control", "private, no-store");
     if (method !== "GET") return json(res, 405, { error: "method not allowed" });
     // Also enforced at this boundary: admin and same-origin only.
-    if (!auth.scopes.includes("admin") || !isSameOrigin(req)) return json(res, 403, { error: "forbidden" });
+    if ((!auth.scopes.includes("admin") && deps.mayView?.(auth, match[1]) !== true) || !isSameOrigin(req)) return json(res, 403, { error: "forbidden" });
     // A lease-bound viewer: both names or neither, holding before anything is inspected, rechecked on every liveness pass.
     const botId = url.searchParams.get("botId");
     const controlLeaseId = url.searchParams.get("controlLeaseId");

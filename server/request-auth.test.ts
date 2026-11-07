@@ -93,6 +93,27 @@ describe("request source for the lockout", () => {
 });
 
 describe("scopes", () => {
+  it("lets a member reach a bot's cloud screen routes, whose handlers want edit on the bot, and none of its lifecycle", () => {
+    for (const [method, path] of [
+      ["GET", "/api/bots/bot-1/computer"],
+      ["GET", "/api/bots/bot-1/computer/control"],
+      ["POST", "/api/bots/bot-1/computer/control"],
+      ["POST", "/api/bots/bot-1/computer/join"],
+      ["POST", "/api/bots/bot-1/computer/screenshot"],
+      ["POST", "/api/bots/bot-1/computer/viewer-close"],
+      ["GET", "/api/desktop-viewer/vps/bot-1"],
+      ["GET", "/api/desktop-viewer/vps/bot-1/websockify"],
+    ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("client");
+    for (const [method, path] of [
+      ["POST", "/api/bots/bot-1/computer/provision"],
+      ["POST", "/api/bots/bot-1/computer/sleep"],
+      ["POST", "/api/bots/bot-1/computer/exec"],
+      ["POST", "/api/bots/bot-1/computer/remove"],
+      ["GET", "/api/desktop-viewer/local/shared"],
+      ["GET", "/api/desktop-viewer/local/pool-1/websockify"],
+    ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("admin");
+  });
+
   it("lets a member reach a connection card's authorize, whose handler decides who may sign in, and nothing past it", () => {
     for (const [method, path] of [
       ["POST", "/api/bots/bot-1/connector-cards/card-1/authorize"],
@@ -159,7 +180,7 @@ describe("scopes", () => {
     ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("client");
     for (const [method, path] of [
       ["POST", "/api/cli-test"], ["GET", "/api/cli-candidates"], ["GET", "/api/instances"], ["PATCH", "/api/instances/claude"],
-      ["POST", "/api/bots/x/computer/exec"], ["POST", "/api/bots/x/computer/join"], ["POST", "/api/local-computer/run"],
+      ["POST", "/api/bots/x/computer/exec"], ["POST", "/api/bots/x/computer/provision"], ["POST", "/api/local-computer/run"],
       ["POST", "/api/bots/x/local-computer/join"], ["POST", "/api/bots/x/local-computer/screenshot"],
       ["GET", "/api/computers/boxes"], ["POST", "/api/computers/boxes/bx_23456789/delete"],
       ["POST", "/api/webhooks"], ["POST", "/api/webhooks/w/rotate"], ["POST", "/api/bots/x/skills"], ["PATCH", "/api/bots/x/skills/s"],
