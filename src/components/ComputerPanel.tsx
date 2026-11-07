@@ -649,7 +649,7 @@ export function ComputerPanel({
     viewerClose: liveTarget?.startsWith("vps/") ? threadPath("computer/viewer-close") : null,
   });
   const liveHere = takeover.here && Boolean(liveTarget);
-  const teach = useTeachOnComputer({ bot, takeover, live: Boolean(liveTarget), ready: phase === "vm", busy: pending === "join" || (!control.held && controlPending), setPending: setControlPending, setError, handBack: () => void handBack() });
+  const teach = useTeachOnComputer({ bot, takeover, live: Boolean(liveTarget), ready: phase === "vm", busy: pending === "join" || (!control.held && controlPending), setPending: setControlPending, setError, handBack: () => void handBack(), showComputer: () => selectPanelView("computer") });
   useEffect(() => { if (liveTarget) void loadLiveDesktop(); }, [liveTarget]);
 
   const pageVisible = usePageVisible();

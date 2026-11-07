@@ -11,6 +11,7 @@ import { restoreComposerDraft } from "@/lib/drafts";
 import { setCallMode } from "@/lib/call-mode";
 import { userBubbleTone } from "@/lib/user-bubble-tone";
 import { BOT_BUTTON, botButtonTone } from "@/lib/bot-button";
+import { takeTeachRecordingRequest, teachRecordingRequested } from "@/lib/teach-request";
 
 const fixture = vi.hoisted(() => ({
   advanced: false,
@@ -139,6 +140,26 @@ describe("the Simple composer in a bot chat", () => {
     openPlus();
     click(item("teach"));
     expect(container.querySelector("textarea")!.value).toBe("/learn how I file expenses");
+  });
+
+  it("records the task on a Local VM: Teach a task wears the record mark and opens the screen to start recording", () => {
+    restoreComposerDraft(`bot:${bot.id}:${bot.threadId}`, { text: "how I file expenses", attachments: [] });
+    render({ bot: { ...bot, computer: "vm" } });
+    openPlus();
+    expect(item("teach")!.querySelector(".text-danger")).not.toBeNull();
+    click(item("teach"));
+    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "toggleComputer", open: true, botId: bot.id });
+    expect(takeTeachRecordingRequest(bot.id)).toBe(true);
+    expect(container.querySelector("textarea")!.value).toBe("how I file expenses");
+  });
+
+  it("keeps the /learn draft, with the cap, where the bot has no Local VM", () => {
+    render({ bot: { ...bot, computer: "cloud" } });
+    openPlus();
+    expect(item("teach")!.querySelector(".text-danger")).toBeNull();
+    click(item("teach"));
+    expect(fixture.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "toggleComputer" }));
+    expect(teachRecordingRequested(bot.id)).toBe(false);
   });
 
   it("opens the file picker straight from the + when attaching is its only row", () => {
