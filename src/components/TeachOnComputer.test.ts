@@ -41,7 +41,7 @@ vi.mock("@/state/store", async (importOriginal) => {
 const { TeachOnComputer } = await import("./TeachOnComputer");
 let root: Root;
 let screen: HTMLDivElement;
-let session: { botId: string; botName: string; leaseId: () => string | null; onTeach: ReturnType<typeof vi.fn<(prompt: string) => void>>; onClose: ReturnType<typeof vi.fn<() => void>> };
+let session: { botId: string; botName: string; computer?: "vm" | "vps"; leaseId: () => string | null; onTeach: ReturnType<typeof vi.fn<(prompt: string) => void>>; onClose: ReturnType<typeof vi.fn<() => void>> };
 const typedSink = { current: null as ((text: string) => void) | null };
 const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
 const button = (label: string) => [...document.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === label);
@@ -148,6 +148,18 @@ describe("teach on computer", () => {
     root.unmount();
     await settle();
     expect(fixture.posts.at(-1)?.action).toBe("discard");
+    root = createRoot(document.createElement("div"));
+  });
+
+  it("names the self-hosted VPS desktop on every call, including the discard on leaving", async () => {
+    session.computer = "vps";
+    draw();
+    await click("Start recording");
+    screen.querySelector("canvas")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await settle();
+    root.unmount();
+    await settle();
+    expect(fixture.posts.map((post) => [post.action, post.body.computer])).toEqual([["start", "vps"], ["events", "vps"], ["discard", "vps"]]);
     root = createRoot(document.createElement("div"));
   });
 });

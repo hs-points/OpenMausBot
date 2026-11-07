@@ -172,3 +172,5 @@ export async function sh(cmd, args, timeout) {
   if (at >= 0 && args.includes("--socket")) return { stdout: JSON.stringify(driverCall(args[at + 1])) };
   return actual.sh(cmd, args, timeout);
 }
+/** The same drawn desktop, for the self-hosted VPS stand-in (teach-vps-mock.mjs). */
+export const fixtureDesktop = { png, driverCall, viewerPort: VIEWER_PORT };

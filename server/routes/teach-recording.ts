@@ -12,11 +12,14 @@ export interface TeachTarget {
   computer: () => Promise<TeachComputer>;
 }
 
+/** Which of the bot's desktops the owner records on: its Local VM, or its self-hosted VPS computer. */
+export type TeachDesktopKind = "vm" | "vps";
+
 export interface TeachRouteDeps {
   recorder: Pick<TeachRecorder, "start" | "record" | "stop" | "discard" | "active">;
   enabled(): boolean;
-  /** Null when the bot has no Local VM desktop to record on; throws a 404 for an unknown bot. */
-  target(botId: string, auth: RequestAuth): TeachTarget | null;
+  /** Null when the bot has no such desktop to record on; throws a 404 for an unknown bot. */
+  target(botId: string, auth: RequestAuth, computer: TeachDesktopKind): TeachTarget | null;
 }
 
 const LEASE = /^[A-Za-z0-9_-]{16,120}$/u;
@@ -36,9 +39,11 @@ export function createTeachRecordingRoutes(deps: TeachRouteDeps): RouteHandler {
     const leaseId = typeof body.controlLeaseId === "string" && LEASE.test(body.controlLeaseId) ? body.controlLeaseId : null;
     if (!leaseId) return json(res, 400, { error: "controlLeaseId is invalid" });
     let target: TeachTarget | null;
-    try { target = deps.target(m[1]!, auth); }
+    const computer = body.computer === undefined || body.computer === "vm" ? "vm" : body.computer === "vps" ? "vps" : null;
+    if (!computer) return json(res, 400, { error: "computer must be vm or vps" });
+    try { target = deps.target(m[1]!, auth, computer); }
     catch (error) { return json(res, (error as { status?: number }).status ?? 404, { error: (error as Error).message }); }
-    if (!target) return json(res, 409, { error: "this bot has no Local VM desktop to record on" });
+    if (!target) return json(res, 409, { error: computer === "vps" ? "this bot has no self-hosted cloud desktop to record on" : "this bot has no Local VM desktop to record on" });
     const recordingId = typeof body.recordingId === "string" && RECORDING.test(body.recordingId) ? body.recordingId : null;
     try {
       if (m[2] === "start") {

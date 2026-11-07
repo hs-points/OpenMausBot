@@ -153,8 +153,17 @@ describe("the Simple composer in a bot chat", () => {
     expect(container.querySelector("textarea")!.value).toBe("how I file expenses");
   });
 
-  it("keeps the /learn draft, with the cap, where the bot has no Local VM", () => {
-    render({ bot: { ...bot, computer: "cloud" } });
+  it("records on the self-hosted VPS cloud computer too", () => {
+    render({ bot: { ...bot, computer: "cloud", cloudBackend: "vps" } });
+    openPlus();
+    expect(item("teach")!.querySelector(".text-danger")).not.toBeNull();
+    click(item("teach"));
+    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "toggleComputer", open: true, botId: bot.id });
+    expect(takeTeachRecordingRequest(bot.id)).toBe(true);
+  });
+
+  it("keeps the /learn draft, with the cap, where the bot has no desktop to record on", () => {
+    render({ bot: { ...bot, computer: "cloud", cloudBackend: "box" } });
     openPlus();
     expect(item("teach")!.querySelector(".text-danger")).toBeNull();
     click(item("teach"));

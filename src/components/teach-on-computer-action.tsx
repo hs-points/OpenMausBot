@@ -10,14 +10,14 @@ import { useStore, type Bot } from "@/state/store";
 import { takeDesktop, type ComputerTakeover } from "./computer-takeover";
 import type { TeachSession } from "./TeachOnComputer";
 
-/** The computer card's Teach on computer action: takes the Local VM desktop full size with the teach banner over it. */
-export function useTeachOnComputer({ bot, takeover, live, ready, busy, setPending, setError, handBack, showComputer }: {
+/** The computer card's Teach on computer action: takes the bot's desktop full size with the teach banner over it. */
+export function useTeachOnComputer({ bot, takeover, live, computer, busy, setPending, setError, handBack, showComputer }: {
   bot: Bot;
   takeover: ComputerTakeover;
   /** This view has a live desktop to drive. */
   live: boolean;
-  /** The bot's computer is a running Local VM. */
-  ready: boolean;
+  /** The running desktop this card can record on: the bot's Local VM or its self-hosted VPS computer; null for none. */
+  computer: "vm" | "vps" | null;
   busy: boolean;
   setPending: (pending: boolean) => void;
   setError: (error: Error | string | null) => void;
@@ -26,6 +26,7 @@ export function useTeachOnComputer({ bot, takeover, live, ready, busy, setPendin
   showComputer: () => void;
 }) {
   const { state, dispatch } = useStore();
+  const ready = computer !== null;
   const [teaching, setTeaching] = useState(false);
   const liveHere = takeover.here && live;
   const wasLive = useRef(false);
@@ -53,6 +54,7 @@ export function useTeachOnComputer({ bot, takeover, live, ready, busy, setPendin
   const session: TeachSession | undefined = teaching ? {
     botId: bot.id,
     botName: bot.name,
+    computer: computer ?? "vm",
     leaseId: takeover.leaseId,
     onClose: () => setTeaching(false),
     onTeach: (prompt) => {
