@@ -4673,6 +4673,7 @@ function audienceChanged(): void {
 const upgrades = createUpgrades();
 const desktopViewer = createDesktopViewer({
   upgrades,
+  mayView: (auth, id) => id.startsWith("vps/") && Boolean(CLOUD_TEAM) && levelOf(auth, id.slice(4)) === "edit",
   target: (id) => {
     if (id.startsWith("vps/")) {
       const botId = id.slice(4);
@@ -15329,6 +15330,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 405, { error: "method not allowed" });
     }
 
+    // A member reaches these through the client allow-list: only one who can edit the bot may watch or steer its screen.
+    m = path.match(/^\/api\/bots\/([\w-]+)\/computer(?:\/(?:control|join|screenshot|viewer-close))?$/);
+    if (m && !auth.scopes.includes("admin") && !(CLOUD_TEAM && levelOf(auth, m[1]) === "edit")) {
+      return json(res, 403, refusalFor(store.bot(m[1])?.name ?? "this bot", "edit"));
+    }
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer$/);
     if (m && method === "GET") {
       const bot = computerPreviewBot(m[1], url);
