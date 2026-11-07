@@ -196,6 +196,12 @@ export function vpsSshTunnelArgs(alias: string, localPort: number, privateIp: st
   return [
     ...(configPath ? ["-F", configPath] : []),
     "-N",
+    // The generated config multiplexes every host. Through a shared master, `ssh -N -L` exits 0 at once and the forward
+    // outlives the child (so the viewer is judged dead and the forward can never be closed). Own the forward instead.
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
     "-o",
     "BatchMode=yes",
     "-o",
