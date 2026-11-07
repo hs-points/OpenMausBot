@@ -263,6 +263,18 @@ describe("POST /api/bots/:id/messages and who typed it", () => {
     expect(typedWords(threadId, [relayed.body.message])).toBe("");
   });
 
+  it("HSP: relays at the bot's exact Auto level and refuses a mismatched one", async () => {
+    const { store, bot, threadId, post } = await fixture();
+    store.patchBot(bot.id, { approvalMode: "auto", autoApprove: true });
+    const wrong = await post({ threadId, sendId: SEND, text: words, expectedActiveLeafId: store.activeLeaf(threadId), expectedApprovalMode: "full" }, "/guarded");
+    expect(wrong.status, JSON.stringify(wrong.body)).toBe(409);
+    expect(String(wrong.body.error)).toMatch(/exact expected approval mode/);
+    const right = await post({ threadId, sendId: OTHER_SEND, text: words, expectedActiveLeafId: store.activeLeaf(threadId), expectedApprovalMode: "auto" }, "/guarded");
+    expect(right.status, JSON.stringify(right.body)).toBe(202);
+    const custom = await post({ threadId, sendId: "send-custom-0123456789", text: words, expectedActiveLeafId: store.activeLeaf(threadId), expectedApprovalMode: "custom" }, "/guarded");
+    expect(custom.status).toBe(400);
+  });
+
   it("does not take a bare loopback send as a person's on a headless server, where it may be a bot's shell", async () => {
     const { threadId, post } = await fixture({}, false);
     const plain = await post({ threadId, sendId: SEND, text: words });
