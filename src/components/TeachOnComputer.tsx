@@ -9,6 +9,8 @@ import { api, ApiError } from "@/state/store";
 export interface TeachSession {
   botId: string;
   botName: string;
+  /** The desktop recorded on: the bot's Local VM (the default) or its self-hosted VPS computer. */
+  computer?: "vm" | "vps";
   /** The control lease this view holds; a recording is bound to it. */
   leaseId: () => string | null;
   /** Hands the authored request to the bot's conversation. */
@@ -40,8 +42,12 @@ export function TeachOnComputer({ session, screen, typedSink, connected }: {
   const capture = useRef<ReturnType<typeof captureTeachInput> | null>(null);
   const base = `/api/bots/${encodeURIComponent(session.botId)}/teach`;
 
+  // Every call names the same desktop: the server keeps a recording under its desktop.
+  const desktop = session.computer === "vps" ? { computer: "vps" } : {};
+  const desktopRef = useRef(desktop);
+  desktopRef.current = desktop;
   const post = <T,>(action: string, body: Record<string, unknown>) =>
-    api<T>(`${base}/${action}`, { method: "POST", body: JSON.stringify(body) });
+    api<T>(`${base}/${action}`, { method: "POST", body: JSON.stringify({ ...body, ...desktop }) });
 
   const pump = () => {
     pumping.current ??= (async () => {
@@ -86,7 +92,7 @@ export function TeachOnComputer({ session, screen, typedSink, connected }: {
     recording.current = null;
     // Leaving mid-recording keeps nothing of it.
     if (live) {
-      void api(`${baseRef.current}/discard`, { method: "POST", body: JSON.stringify({ controlLeaseId: live.lease, recordingId: live.id }) }).catch(() => {});
+      void api(`${baseRef.current}/discard`, { method: "POST", body: JSON.stringify({ controlLeaseId: live.lease, recordingId: live.id, ...desktopRef.current }) }).catch(() => {});
     }
   }, [typedSink]);
 

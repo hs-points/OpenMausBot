@@ -9,7 +9,7 @@ import { BrowserEvidence } from "../browser-evidence.ts";
 import { json, readBody } from "../harness/http.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import { TeachRecorder } from "../teach-recording.ts";
-import { createTeachRecordingRoutes, type TeachTarget } from "./teach-recording.ts";
+import { createTeachRecordingRoutes, type TeachDesktopKind, type TeachTarget } from "./teach-recording.ts";
 import { dispatchRoutes } from "./table.ts";
 
 const LEASE = "lease-0123456789abcdef";
@@ -25,11 +25,13 @@ async function serve(options: { enabled?: boolean; auth?: RequestAuth; target?: 
   const evidence = new BrowserEvidence({ root: join(dir, "evidence") });
   const recorder = new TeachRecorder({ evidence, sleep: async () => {}, settleMs: 0 });
   const held = new Set([LEASE]);
-  const target = (botId: string): TeachTarget | null => {
+  const asked: TeachDesktopKind[] = [];
+  const target = (botId: string, _auth: RequestAuth, computer: TeachDesktopKind): TeachTarget | null => {
+    asked.push(computer);
     if (options.target === "unknown") throw Object.assign(new Error("no such bot"), { status: 404 });
     if (options.target === "none") return null;
     return {
-      key: `vm-${botId}`, botId, threadId: "thread-1", desktop: "Ada's Linux desktop",
+      key: `${computer}-${botId}`, botId, threadId: "thread-1", desktop: computer === "vps" ? "Ada's cloud desktop" : "Ada's Linux desktop",
       holds: (leaseId) => held.has(leaseId),
       computer: async () => ({
         screenshot: async () => ({ bytes: Buffer.from("png"), type: "png" }),
@@ -49,7 +51,7 @@ async function serve(options: { enabled?: boolean; auth?: RequestAuth; target?: 
     const response = await fetch(`${base}/${action}`, { method: "POST", headers: { "content-type": contentType }, body: JSON.stringify(body) });
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   };
-  return { post, held, evidence, base };
+  return { post, held, evidence, base, asked };
 }
 
 describe("teach on computer routes", () => {
@@ -72,6 +74,19 @@ describe("teach on computer routes", () => {
     ]);
     expect(stopped.body).toMatchObject({ desktop: "Ada's Linux desktop", threadId: "thread-1" });
     expect(stopped.body.prompt).toContain("Goal: Find invoices");
+  });
+
+  it("records on the self-hosted VPS desktop when asked, and keeps each call on that desktop", async () => {
+    const { post, asked } = await serve();
+    const started = await post("start", { controlLeaseId: LEASE, computer: "vps" });
+    expect(started.status).toBe(200);
+    const recordingId = started.body.recordingId as string;
+    // A call without the same desktop names another recording key: the VPS recording is not found there.
+    expect((await post("stop", { controlLeaseId: LEASE, recordingId })).status).toBe(404);
+    const stopped = await post("stop", { controlLeaseId: LEASE, recordingId, computer: "vps" });
+    expect(stopped).toMatchObject({ status: 200, body: { desktop: "Ada's cloud desktop" } });
+    expect(asked).toEqual(["vps", "vm", "vps"]);
+    expect((await post("start", { controlLeaseId: LEASE, computer: "box" })).status).toBe(400);
   });
 
   it("is for the owner only, and only while skill authoring is on", async () => {

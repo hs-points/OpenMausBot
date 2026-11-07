@@ -20,6 +20,11 @@ screen panel and press **Teach on computer**. The composer's + menu → **Teach 
 task** (red record icon for a Local VM bot) opens the panel and does the same,
 even when the panel was closed.
 
+`--vps` puts Ada on a self-hosted VPS cloud computer instead (the KVM8 backend):
+`vps-computer.ts` is replaced as well (`server/testing/teach-vps-mock.mjs`) by the
+same drawn desktop, so nothing reaches SSH or Docker. The + menu and the panel
+behave the same, and the review names "Ada's cloud desktop".
+
 1. The desktop opens full size in take-control mode with the banner and a red
    **Start recording**; **Not now** closes it.
 2. While recording, the bottom pill reads "You're in control · N steps · Stop".

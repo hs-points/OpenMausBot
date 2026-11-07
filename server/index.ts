@@ -605,7 +605,7 @@ import { createInternalThreadRoutes } from "./routes/internal-threads.ts";
 import { createBrowserEvidenceRoutes } from "./routes/browser-evidence.ts";
 import { createTeachRecordingRoutes } from "./routes/teach-recording.ts";
 import { TeachRecorder } from "./teach-recording.ts";
-import { localVmTeachComputer } from "./teach-desktop.ts";
+import { localVmTeachComputer, vpsTeachComputer } from "./teach-desktop.ts";
 import { createSignInCardRoutes } from "./routes/sign-in-cards.ts";
 import { createInternalEscalateRoutes } from "./routes/internal-escalate.ts";
 import { createInternalChiefTeamRoutes } from "./routes/internal-chief-team.ts";
@@ -12391,12 +12391,20 @@ ROUTES.push(createBrowserSiteRoutes({
 ROUTES.push(createTeachRecordingRoutes({
   recorder: new TeachRecorder({ evidence: browserEvidence }),
   enabled: () => skillAuthoringEnabled(cfg),
-  target: (botId) => {
+  target: (botId, _auth, computer) => {
     const bot = store.bot(botId);
     if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
     if (CLOUD_HOME) return null;
-    const target = localVmTargetForStatus(bot.id, bot.threadId);
     const controlKey = botComputerControlKey(bot);
+    if (computer === "vps") {
+      if (bot.cloudBackend !== "vps" || inheritedTeamComputer(bot)) return null;
+      return {
+        key: `vps/${bot.id}`, botId: bot.id, threadId: bot.threadId, desktop: `${bot.name}'s cloud desktop`,
+        holds: (leaseId) => computerControl.ownsLease(controlKey, leaseId),
+        computer: () => vpsTeachComputer(vpsConfigForBot(cfg, bot), bot.id),
+      };
+    }
+    const target = localVmTargetForStatus(bot.id, bot.threadId);
     return {
       key: target.key, botId: bot.id, threadId: bot.threadId, desktop: `${bot.name}'s Linux desktop`,
       holds: (leaseId) => computerControl.ownsLease(controlKey, leaseId),

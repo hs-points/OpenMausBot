@@ -170,7 +170,7 @@ export function ApprovalChip({ choice, quiet = false }: { choice: ApprovalChoice
  */
 export function ComposerPlusMenu({ onAttach, goal, teach, teachRecords = false, approval, callBotId, extraItems = [], circle = false }: {
   onAttach: () => void;
-  /** Starts a /learn draft in the field, where the composer offers /learn; on a Local VM, records the task instead. */
+  /** Starts a /learn draft in the field, where the composer offers /learn; on a Local VM or self-hosted VPS, records the task instead. */
   teach?: () => void;
   /** Teach a task records on the bot's computer: the record mark instead of the cap. */
   teachRecords?: boolean;

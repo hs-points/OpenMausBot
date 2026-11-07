@@ -397,7 +397,8 @@ export function Composer({
     });
   };
   // On a Local VM, Teach a task records the owner doing it: the screen card takes control and starts recording.
-  const teachRecords = Boolean(profile && !group && effectivePlace(profile, composerTask) === "vm");
+  const teachPlace = profile && !group ? effectivePlace(profile, composerTask) : null;
+  const teachRecords = teachPlace === "vm" || (teachPlace === "cloud" && profile?.cloudBackend === "vps");
   const teachTask = () => {
     if (teachRecords && bot) {
       requestTeachRecording(bot.id);

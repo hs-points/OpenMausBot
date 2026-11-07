@@ -1,6 +1,7 @@
 // Teach on computer against an isolated server: the real server, renderer and noVNC viewer, with only the Local VM
 // container replaced by a drawn fake desktop on 127.0.0.1 (server/testing/teach-vm-hooks.mjs). No Docker, no user data.
-// Run: node --experimental-strip-types scripts/verify-teach-on-computer.ts [--static <vite build dir>]
+// Run: node --experimental-strip-types scripts/verify-teach-on-computer.ts [--vps] [--static <vite build dir>]
+// --vps puts Ada on a self-hosted VPS cloud computer (server/testing/teach-vps-mock.mjs) instead of a Local VM.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +13,7 @@ import { fixtureApi, parkUntilSignal } from "./testing/preview-fixture.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const given = process.argv.indexOf("--static");
+const onVps = process.argv.includes("--vps");
 const home = mkdtempSync(join(tmpdir(), "omb-teach-verify-"));
 const staticDir = given > 0 ? process.argv[given + 1]! : join(home, "ui");
 if (given < 0) {
@@ -24,6 +26,7 @@ mkdirSync(join(data, "tmp"), { recursive: true });
 writeFileSync(join(data, "config.json"), JSON.stringify({
   features: { smartSetupChoices: false },
   localVm: { mode: "per-bot" },
+  ...onVps ? { vps: { sshAlias: "teach-fixture-vps" } } : {},
   instances: { claude: { driver: "claudeAgent", displayName: "Verification fixture", config: { cli: join(ROOT, "server", "testing", "fake-claude-cli.ts") } } },
 }, null, 2));
 const port = await freePortBlock([0, 1]);
@@ -45,7 +48,7 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   const { bot } = await api("POST", "/api/bots", { name: "Ada" });
-  await api("PATCH", `/api/bots/${bot.id}`, { computer: "vm" });
+  await api("PATCH", `/api/bots/${bot.id}`, onVps ? { computer: "cloud", cloudBackend: "vps" } : { computer: "vm" });
   console.log(JSON.stringify({ url, botId: bot.id, data, log: logPath, evidence: join(data, "evidence") }, null, 2));
   await parkUntilSignal();
 } finally {
