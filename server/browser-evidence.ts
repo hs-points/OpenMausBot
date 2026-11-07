@@ -1,4 +1,5 @@
-// Browser step evidence: DATA_DIR/evidence/<threadId>/<generation>/steps.jsonl and step-NNNNNN.jpg; folders 0700, files
+// Step evidence (browser steps and taught computer steps): DATA_DIR/evidence/<threadId>/<generation>/steps.jsonl and
+// step-NNNNNN.jpg or .png; folders 0700, files
 // 0600, never in a workspace backup. Screenshots stop at 200 MB a conversation, the smaller of 2 GB and a quarter of free
 // space overall, or under 1 GB free; step lines stop at 50 MB a conversation, so a looping bot cannot fill the disk.
 import { createHash } from "node:crypto";
@@ -39,7 +40,7 @@ export const EVIDENCE_LIMITS = {
 
 const THREAD_ID = /^[\w-]{1,128}$/u;
 const GENERATION = /^[A-Za-z0-9-]{8,64}$/u;
-const IMAGE_FILE = /^step-\d{6,12}\.jpg$/u;
+const IMAGE_FILE = /^step-\d{6,12}\.(?:jpg|png)$/u;
 const STEPS_FILE = "steps.jsonl";
 
 type Statfs = (path: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }>;
@@ -49,8 +50,10 @@ export interface EvidenceDeps {
   threadExists(threadId: string): boolean;
 }
 
-export function imageFileName(step: number): string {
-  return `step-${String(step).padStart(6, "0")}.jpg`;
+export type EvidenceImageType = "jpg" | "png";
+
+export function imageFileName(step: number, type: EvidenceImageType = "jpg"): string {
+  return `step-${String(step).padStart(6, "0")}.${type}`;
 }
 
 function directories(path: string): string[] {
@@ -168,7 +171,7 @@ export class BrowserEvidence {
   }
 
   /** Created empty and 0600 first, so the engine's write keeps that mode. */
-  imageTarget(threadId: string, generation: string, step: number): { path: string } | { skipped: string } {
+  imageTarget(threadId: string, generation: string, step: number, type: EvidenceImageType = "jpg"): { path: string } | { skipped: string } {
     if (!THREAD_ID.test(threadId) || !GENERATION.test(generation)) return { skipped: "capture-failed" };
     if (this.budget.low) return { skipped: "disk-low" };
     if (this.threadSize(threadId) >= EVIDENCE_LIMITS.threadBytes) return { skipped: "thread-cap" };
@@ -177,7 +180,7 @@ export class BrowserEvidence {
       if (this.totalBytes >= this.budget.cap) return { skipped: "global-cap" };
     }
     const dir = join(this.root, threadId, generation);
-    const path = join(dir, imageFileName(step));
+    const path = join(dir, imageFileName(step, type));
     try {
       this.ensureDir(dir);
       closeSync(openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600));
@@ -327,6 +330,19 @@ export class BrowserEvidence {
     for (const key of [...this.lastImage.keys(), ...this.active.keys()]) {
       if (key.startsWith(`${threadId}/`)) { this.lastImage.delete(key); this.active.delete(key); }
     }
+    if (this.totalBytes !== null) this.totalBytes = Math.max(0, this.totalBytes - bytes);
+  }
+
+  removeGeneration(threadId: string, generation: string): void {
+    if (!THREAD_ID.test(threadId) || !GENERATION.test(generation)) return;
+    let bytes = 0;
+    const dir = join(this.root, threadId, generation);
+    for (const name of files(dir)) if (IMAGE_FILE.test(name)) bytes += size(join(dir, name));
+    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    this.threadBytes.delete(threadId);
+    this.stepBytes.delete(threadId);
+    this.lastImage.delete(`${threadId}/${generation}`);
+    this.active.delete(`${threadId}/${generation}`);
     if (this.totalBytes !== null) this.totalBytes = Math.max(0, this.totalBytes - bytes);
   }
 

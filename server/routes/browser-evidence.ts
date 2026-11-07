@@ -46,12 +46,12 @@ export function createBrowserEvidenceRoutes(deps: BrowserEvidenceRouteDeps): Rou
       catch { res.destroy(); }
       return;
     }
-    m = /^\/api\/threads\/([\w-]+)\/evidence\/([A-Za-z0-9-]{8,64})\/(step-\d{6,12}\.jpg)$/u.exec(path);
+    m = /^\/api\/threads\/([\w-]+)\/evidence\/([A-Za-z0-9-]{8,64})\/(step-\d{6,12}\.(?:jpg|png))$/u.exec(path);
     if (!m) return PASS;
     const file = deps.threadExists(m[1]!) ? deps.evidence.imageFile(m[1]!, m[2]!, m[3]!) : null;
     if (!file) return json(res, 404, { error: "no such screenshot" });
     res.writeHead(200, {
-      "content-type": "image/jpeg",
+      "content-type": m[3]!.endsWith(".png") ? "image/png" : "image/jpeg",
       "x-content-type-options": "nosniff",
       "cache-control": "private, no-store",
     });

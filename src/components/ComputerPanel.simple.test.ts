@@ -630,7 +630,7 @@ describe("Technical controls", () => {
     expect(simple.html).not.toContain("Delete this bot");
     const row = simple.nodes.find((node) => node.props["data-testid"] === "computer-actions")!;
     expect(nodes(row.props.children).filter((node) => node.type === "button").map((node) => text(node.props.children)))
-      .toEqual(["Take control", "Full screen"]);
+      .toEqual(["Take control", "Full screen", "Teach on computer"]);
 
     fixture.advanced = true;
     fixture.values = [];

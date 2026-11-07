@@ -30,7 +30,8 @@ const loadLiveDesktop = () => import("./LiveDesktop").then((module) => ({ defaul
 const LiveDesktop = lazy(loadLiveDesktop);
 import { browserAvailable, browserUnavailableReason, builtInBrowserEnabled } from "@/lib/feature-flags";
 import { parseComputerHelp, transitionComputerControlLease, type ComputerControlAction } from "@/lib/computer-control";
-import { openProviderDesktop, useComputerTakeover } from "./computer-takeover";
+import { openProviderDesktop, takeDesktop, useComputerTakeover } from "./computer-takeover";
+import { useTeachOnComputer } from "./teach-on-computer-action";
 import { SignInBanner } from "./SignInRequestCard";
 import { LocalScreenPreview } from "./LocalScreenPreview";
 import { LinuxLocalControl } from "./LinuxLocalControl";
@@ -648,6 +649,7 @@ export function ComputerPanel({
     viewerClose: liveTarget?.startsWith("vps/") ? threadPath("computer/viewer-close") : null,
   });
   const liveHere = takeover.here && Boolean(liveTarget);
+  const teach = useTeachOnComputer({ bot, takeover, live: Boolean(liveTarget), ready: phase === "vm", busy: pending === "join" || (!control.held && controlPending), setPending: setControlPending, setError, handBack: () => void handBack() });
   useEffect(() => { if (liveTarget) void loadLiveDesktop(); }, [liveTarget]);
 
   const pageVisible = usePageVisible();
@@ -884,16 +886,7 @@ export function ComputerPanel({
 
   const takeControl = async (expand = false) => {
     if (!liveTarget) return cloudPreviewReady ? openDesktop() : undefined;
-    if (takeover.here) return takeover.setExpanded(expand || takeover.expanded);
-    setControlPending(true);
-    setError(null);
-    try {
-      await takeover.take(expand);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause : String(cause));
-    } finally {
-      setControlPending(false);
-    }
+    await takeDesktop(takeover, expand, setControlPending, setError);
   };
 
   const handBack = async () => {
@@ -1319,7 +1312,7 @@ export function ComputerPanel({
               <LiveDesktop
                 target={liveTarget} threadId={bot.threadId} name={bot.name} poster={frameSrc}
                 expanded={takeover.expanded} onExpandedChange={takeover.setExpanded}
-                onHandBack={() => void handBack()} handingBack={takeover.handingBack}
+                onHandBack={() => void handBack()} handingBack={takeover.handingBack} teach={teach.session}
                 onUnreachable={() => { takeover.leave(); setError(new LocalizedPanelError("computer.err.openDesktop")); }}
               />
             </Suspense>
@@ -1584,6 +1577,7 @@ export function ComputerPanel({
             {t(control.held ? "computer.fullScreen" : "computer.takeControl")}
           </button>
         )}
+        {advanced && teach.button("mt-2 flex w-full")}
         {advanced && canManageVm && phase === "vm" && vmStatus?.mode === "per-bot" && (
           <button
             onClick={() => void runVmAction("vm-delete")}
@@ -1619,6 +1613,7 @@ export function ComputerPanel({
               <Maximize2 size={14} />
               {t("computer.fullScreen")}
             </button>
+            {teach.button("flex flex-auto")}
             {cloudPreviewReady && canManageCloud && (cloudBackend === "vps" || boatState !== "archived") && (
               <button
                 type="button"
