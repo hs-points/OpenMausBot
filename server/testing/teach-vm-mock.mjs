@@ -151,17 +151,27 @@ export async function containerComputerAction(_action, _run, _platform, target =
 export async function containerExec() { return { exitCode: 0, stdout: "", stderr: "", timedOut: false }; }
 export async function containerComputerFrame() { return { png: png().toString("base64"), format: "png" }; }
 export async function containerComputerScreenshot() { return { png: png().toString("base64"), format: "png" }; }
-function driverCall(tool) {
+// Shaped like cua-driver 0.37 on Linux (checked on the KVM8 desktop image): list_windows has no focus flag, only
+// z_index; get_window_state gives an element list only for tree_format "elements" (Markdown otherwise), with screen
+// `frame`s, `label`s and field `value`s (null for a password field), and no focus state.
+function driverCall(tool, rawArgs) {
+  let args = {};
+  try { args = JSON.parse(rawArgs ?? "{}"); } catch {}
   if (tool === "list_windows") {
-    return { structuredContent: { windows: [{ pid: 4242, window_id: 7, app_name: "Firefox", title: "Sign in — Invoices", is_focused: true }] } };
+    return { windows: [
+      { pid: 130, window_id: 11, app_name: "Xfdesktop", title: "Desktop", bounds: { x: 0, y: 0, width: W, height: H }, is_on_screen: true, z_index: 0 },
+      { pid: 4242, window_id: 7, app_name: "firefox-esr", title: "Sign in — Invoices", bounds: { x: WINDOW.x, y: WINDOW.y, width: WINDOW.w, height: WINDOW.h }, is_on_screen: true, z_index: 1 },
+      { pid: 117, window_id: 12, app_name: "Xfce4-panel", title: "xfce4-panel", bounds: { x: 0, y: 0, width: W, height: 28 }, is_on_screen: true, z_index: 2 },
+    ] };
   }
   if (tool === "get_window_state") {
-    const element = (item, index) => ({ role: item.role, name: item.name, bounds: { x: item.x, y: item.y, width: item.w, height: item.h },
-      states: index === desk.focused ? ["focused", "editable"] : ["editable"] });
-    return { structuredContent: { elements: [
-      { role: "frame", name: "Sign in — Invoices", bounds: { x: WINDOW.x, y: WINDOW.y, width: WINDOW.w, height: WINDOW.h }, states: [] },
-      ...FIELDS.map(element),
-      { role: BUTTON.role, name: BUTTON.name, bounds: { x: BUTTON.x, y: BUTTON.y, width: BUTTON.w, height: BUTTON.h }, states: [] },
+    if (args.tree_format !== "elements") return { structuredContent: { tree_format: "markdown", tree_markdown: "- frame Sign in — Invoices" } };
+    const frame = (item) => ({ x: item.x, y: item.y, w: item.w, h: item.h });
+    return { structuredContent: { tree_format: "elements", elements: [
+      { element_index: 0, role: "frame", label: "Sign in — Invoices", frame: frame(WINDOW) },
+      ...FIELDS.map((item, index) => ({ element_index: index + 1, role: item.role, label: item.name, frame: frame(item),
+        value: item.role === "password text" || !desk.text[index] ? null : desk.text[index] })),
+      { element_index: 3, role: BUTTON.role, label: BUTTON.name, frame: frame(BUTTON) },
     ] } };
   }
   return null;
@@ -169,7 +179,7 @@ function driverCall(tool) {
 // cua-driver tool calls (`exec … cua-driver call <tool> <json> --socket …`) answer from the drawn desktop; anything else runs for real.
 export async function sh(cmd, args, timeout) {
   const at = args.indexOf("call");
-  if (at >= 0 && args.includes("--socket")) return { stdout: JSON.stringify(driverCall(args[at + 1])) };
+  if (at >= 0 && args.includes("--socket")) return { stdout: JSON.stringify(driverCall(args[at + 1], args[at + 2])) };
   return actual.sh(cmd, args, timeout);
 }
 /** The same drawn desktop, for the self-hosted VPS stand-in (teach-vps-mock.mjs). */

@@ -30,6 +30,6 @@ export function closeVpsDesktopTunnel() { return { closed: true }; }
 // cua-driver tool calls (`-H ssh://… exec … cua-driver call <tool> <json> --socket …`) answer from the drawn desktop.
 export async function defaultRunner(args) {
   const at = args.indexOf("call");
-  if (args[1] === `ssh://${ALIAS}` && at >= 0 && args.includes("--socket")) return { stdout: JSON.stringify(fixtureDesktop.driverCall(args[at + 1])), stderr: "" };
+  if (args[1] === `ssh://${ALIAS}` && at >= 0 && args.includes("--socket")) return { stdout: JSON.stringify(fixtureDesktop.driverCall(args[at + 1], args[at + 2])), stderr: "" };
   throw new Error("the Teach fixture has no Docker over SSH");
 }

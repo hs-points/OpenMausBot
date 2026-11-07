@@ -29,6 +29,9 @@ function fakeComputer() {
     inspectDelay: 0,
     screenshots: 0,
     beforeInspect: null as null | (() => void),
+    hit: { role: "push button", label: "Export" } as TeachContext["hit"],
+    hitKey: undefined as string | undefined,
+    values: undefined as Record<string, string> | undefined,
   };
   const computer: TeachComputer = {
     screenshot: async () => { state.screenshots++; return { bytes: Buffer.concat([PNG, Buffer.from([state.screenshots])]), type: "png" }; },
@@ -37,7 +40,9 @@ function fakeComputer() {
       if (state.inspectDelay) await new Promise((done) => setTimeout(done, state.inspectDelay));
       const context: TeachContext = { app: "Firefox", window: "Invoices" };
       if (state.focus) context.focused = state.focus;
-      if (point) context.hit = { role: "push button", label: "Export" };
+      if (point && state.hit) context.hit = state.hit;
+      if (point && state.hitKey) context.hitKey = state.hitKey;
+      if (state.values) context.values = { ...state.values };
       return context;
     },
   };
@@ -163,6 +168,68 @@ describe("recording the owner's steps", () => {
     expect(JSON.stringify(steps)).not.toMatch(/alice|s3cret/u);
   });
 
+  describe("when the driver reports no focus (cua-driver on Linux)", () => {
+    const click = { kind: "click", x: 5, y: 5, button: "left", double: false } as const;
+    function clickedEmail() {
+      const fixture = setup();
+      fixture.state.focus = undefined;
+      fixture.state.hit = { role: "entry", label: "Email" };
+      fixture.state.hitKey = "email";
+      return fixture;
+    }
+
+    it("shows text that the clicked plain field now holds", async () => {
+      const { start, record, stop, state } = clickedEmail();
+      const { recordingId } = await start();
+      record(recordingId, [click, { kind: "typing" }]);
+      state.values = { email: "ada@example.com" };
+      record(recordingId, [{ kind: "type", text: "ada@example.com" }]);
+      const { steps } = await stop(recordingId);
+      expect(steps[2]).toMatchObject({ action: "type", summary: 'Type "ada@example.com" into "Email" (entry)' });
+      expect(steps[2]!.hidden).toBeUndefined();
+    });
+
+    it("hides text when the clicked field is a password field, does not hold it, or focus moved after the click", async () => {
+      for (const [hit, values, between] of [
+        [{ role: "password text", label: "Password" }, { email: "hunter2" }, []],
+        [{ role: "entry", label: "Email" }, { email: "something else" }, []],
+        [{ role: "entry", label: "Email" }, { email: "hunter2" }, [{ kind: "key", key: "Tab", modifiers: [] }]],
+        [{ role: "push button", label: "Export" }, { email: "hunter2" }, []],
+      ] as const) {
+        const { start, record, stop, state } = clickedEmail();
+        state.hit = hit;
+        const { recordingId } = await start();
+        record(recordingId, [click, ...between as unknown as TeachEvent[], { kind: "typing" }]);
+        state.values = { ...values };
+        record(recordingId, [{ kind: "type", text: "hunter2" }]);
+        const { steps } = await stop(recordingId);
+        expect(steps.find((step) => step.action === "type")).toMatchObject({ hidden: true });
+        expect(JSON.stringify(steps)).not.toContain("hunter2");
+      }
+    });
+
+    it("still shows it when the next click lands while the slow field check is running", async () => {
+      const { start, record, stop, state } = clickedEmail();
+      const { recordingId } = await start();
+      state.inspectDelay = 20;
+      record(recordingId, [click, { kind: "typing" }]);
+      state.values = { email: "ada" };
+      record(recordingId, [{ kind: "type", text: "ada" }, { ...click, y: 50 }]);
+      const { steps } = await stop(recordingId);
+      expect(steps[2]).toMatchObject({ action: "type", summary: 'Type "ada" into "Email" (entry)' });
+    });
+
+    it("hides text when the click's field could not be identified", async () => {
+      const { start, record, stop, state } = clickedEmail();
+      state.hitKey = undefined;
+      state.values = { email: "ada" };
+      const { recordingId } = await start();
+      record(recordingId, [click, { kind: "typing" }, { kind: "type", text: "ada" }]);
+      const { steps } = await stop(recordingId);
+      expect(steps[2]).toMatchObject({ hidden: true });
+    });
+  });
+
   it("stops taking steps once control is lost, but can still be stopped", async () => {
     let holding = true;
     const { start, record, stop } = setup({ holds: () => holding });
@@ -239,12 +306,43 @@ describe("reading the desktop around a step", () => {
       ] };
     }, { x: 20, y: 60 });
     expect(calls).toEqual(["list_windows", "get_window_state"]);
+    expect(context?.hitKey).toBeTypeOf("string");
+    delete context!.hitKey;
     expect(context).toEqual({
       app: "Firefox",
       window: "Login",
       focused: { role: "password text", label: "Password" },
       hit: { role: "push button", label: "Sign in" },
     });
+  });
+
+  it("reads cua-driver's Linux output: no focus flag, windows stacked by z_index, an element tree with field values", async () => {
+    // Shapes as returned by cua-driver 0.37 on the KVM8 desktop image (Xfce, Firefox ESR), trimmed.
+    const windows = [
+      { app_name: "Xfdesktop", bounds: { height: 900, width: 1280, x: 0, y: 0 }, is_on_screen: true, pid: 130, title: "Desktop", window_id: 18874408, z_index: 0 },
+      { app_name: "firefox-esr", bounds: { height: 849, width: 1280, x: 0, y: 51 }, is_on_screen: true, pid: 220, title: "Sign in — Mozilla Firefox", window_id: 29360172, z_index: 1 },
+      { app_name: "Xfce4-panel", bounds: { height: 27, width: 1280, x: 0, y: 0 }, is_on_screen: true, pid: 117, title: "xfce4-panel", window_id: 14680067, z_index: 2 },
+    ];
+    const elements = [
+      { element_index: 40, role: "entry", label: "Search or enter address", value: "file:///tmp/signin.html", frame: { h: 28, w: 780, x: 252, y: 102 } },
+      { element_index: 41, role: "entry", label: "Email", value: "ada@example.com", frame: { h: 30, w: 408, x: 48, y: 359 } },
+      { element_index: 42, role: "password text", label: "Password", value: "should-never-be-read", frame: { h: 30, w: 408, x: 48, y: 437 } },
+    ];
+    const asked: unknown[] = [];
+    const call = async (tool: string, args: Record<string, unknown>) => {
+      asked.push(args);
+      return tool === "list_windows" ? { windows } : { structuredContent: { tree_format: "elements", elements } };
+    };
+    const atEmail = await inspectDesktop(call, { x: 100, y: 374 });
+    expect(asked[1]).toEqual({ pid: 220, window_id: 29360172, tree_format: "elements" });
+    expect(atEmail).toMatchObject({ app: "firefox-esr", window: "Sign in — Mozilla Firefox", hit: { role: "entry", label: "Email" } });
+    expect(atEmail?.focused).toBeUndefined();
+    expect(atEmail?.values?.[atEmail.hitKey!]).toBe("ada@example.com");
+    expect(JSON.stringify(atEmail)).not.toContain("should-never-be-read");
+    // With no point the panel (z 2) is skipped for the topmost real window.
+    expect(await inspectDesktop(call)).toMatchObject({ app: "firefox-esr" });
+    // A click on the panel is a click on the panel.
+    expect(await inspectDesktop(call, { x: 5, y: 5 })).toMatchObject({ app: "Xfce4-panel" });
   });
 
   it("answers nothing when the driver returns nothing it understands", async () => {
