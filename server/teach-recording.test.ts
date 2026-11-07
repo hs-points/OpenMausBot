@@ -285,6 +285,9 @@ describe("the request handed to skill authoring", () => {
     expect(prompt).toContain("Ada's Linux desktop");
     expect(prompt).toContain("1. Click \"Export\"\n2. Type hidden text");
     expect(prompt).not.toContain("Start in Firefox");
+    expect(prompt).toContain("explain the whole process back to me");
+    expect(prompt).toContain("run the skill once now on that same computer as a demo");
+    expect(prompt).not.toContain("Do not re-run");
   });
 });
 
