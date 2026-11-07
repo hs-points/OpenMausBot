@@ -604,6 +604,9 @@ import { createInternalSignInRoutes } from "./routes/sign-in.ts";
 import { createInternalMcpRoutes } from "./routes/internal-mcp.ts";
 import { createInternalThreadRoutes } from "./routes/internal-threads.ts";
 import { createBrowserEvidenceRoutes } from "./routes/browser-evidence.ts";
+import { createTeachRecordingRoutes } from "./routes/teach-recording.ts";
+import { TeachRecorder } from "./teach-recording.ts";
+import { localVmTeachComputer } from "./teach-desktop.ts";
 import { createSignInCardRoutes } from "./routes/sign-in-cards.ts";
 import { createInternalChiefTeamRoutes } from "./routes/internal-chief-team.ts"; import { createInternalModelRoutes } from "./routes/internal-models.ts"; import { createOwnThreads } from "./host/own-threads.ts"; import { burstDefaultModel, burstProposalRefusal, createBurstHost } from "./host/burst-host.ts"; import { expandBurstTurnText } from "./burst/command.ts"; import { createBurstProposalRoutes, createBurstRoutes } from "./routes/burst.ts";
 import { createRoomHoldRoutes } from "./routes/room-holds.ts";
@@ -12347,6 +12350,22 @@ ROUTES.push(createBrowserSiteRoutes({
   target: (which, threadId) => signedInSitesTarget(which, threadId === null ? "team" : teamHost.browserAudience(threadId)),
   list: (target) => listSignedInSites(target),
   signOut: (target, site) => signOutOfSites(target, site),
+}));
+ROUTES.push(createTeachRecordingRoutes({
+  recorder: new TeachRecorder({ evidence: browserEvidence }),
+  enabled: () => skillAuthoringEnabled(cfg),
+  target: (botId) => {
+    const bot = store.bot(botId);
+    if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
+    if (CLOUD_HOME) return null;
+    const target = localVmTargetForStatus(bot.id, bot.threadId);
+    const controlKey = botComputerControlKey(bot);
+    return {
+      key: target.key, botId: bot.id, threadId: bot.threadId, desktop: `${bot.name}'s Linux desktop`,
+      holds: (leaseId) => computerControl.ownsLease(controlKey, leaseId),
+      computer: () => localVmTeachComputer(target),
+    };
+  },
 }));
 ROUTES.push(createBrowserEvidenceRoutes({ evidence: browserEvidence.attach({ onChange: (listener) => store.onChange(listener), threadExists: (id) => Boolean(threadOwner(id)) }), threadExists: (id) => Boolean(threadOwner(id)) }));
 const loginRoutes = botLogins.routes((id) => Boolean(store.bot(id))); ROUTES.push(createLoginRoutes(loginRoutes), createVaultRoutes({ logins: loginRoutes, secrets: logins, linked: () => botLogins.linkedSecrets(), keys: mcpKeys, reader: vaultReaders.viewer }));

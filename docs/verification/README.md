@@ -63,6 +63,7 @@ Use only mapped, tested commands:
 - [Chat UI, driven headlessly](chat-ui.md)
 - [Computer panel focus hand-off](computer-panel-focus.md)
 - [Taking control of a bot's computer](take-control.md)
+- [Teach on computer: record a task on the live desktop](teach-on-computer.md)
 - [Saved steps: repeating a computer task without AI](saved-steps.md)
 - [Native dictation retention and send-to-stop](dictation.md)
 - [Proactive routines and the brief](proactive-routines.md)

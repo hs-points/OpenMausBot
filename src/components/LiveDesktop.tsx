@@ -5,11 +5,12 @@ import { cn } from "@/lib/cn";
 import { connectDesktop, typeOnDesktop } from "@/lib/desktop-connection";
 import { t } from "@/lib/i18n";
 import { useCaptionChrome, useDesktopCapabilities } from "./DesktopCapabilities";
+import { TeachOnComputer, type TeachSession } from "./TeachOnComputer";
 
 type Connection = "connecting" | "connected" | "disconnected";
 
 /** The computer the person took control of, live and drivable where they were watching it. */
-export function LiveDesktop({ target, threadId, name, poster, expanded, onExpandedChange, onHandBack, handingBack, onUnreachable }: {
+export function LiveDesktop({ target, threadId, name, poster, expanded, onExpandedChange, onHandBack, handingBack, onUnreachable, teach }: {
   target: string;
   threadId: string;
   name: string;
@@ -21,6 +22,8 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
   handingBack: boolean;
   /** The desktop never came up, so the person cannot drive it. */
   onUnreachable: () => void;
+  /** Teach on computer: record the person's own steps for the bot to learn. */
+  teach?: TeachSession;
 }) {
   const screen = useRef<HTMLDivElement>(null);
   const rfb = useRef<RFB | null>(null);
@@ -28,6 +31,7 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
   const [attempt, setAttempt] = useState(0);
   const [text, setText] = useState("");
   const live = useRef(false);
+  const typedSink = useRef<((text: string) => void) | null>(null);
   const { dragProps, noDragStyle } = useCaptionChrome();
   const macInset = useDesktopCapabilities().capabilities.windowChrome === "mac-inset";
   const unreachable = useRef(onUnreachable);
@@ -100,6 +104,7 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
               event.preventDefault();
               if (!rfb.current || connection !== "connected" || !text) return;
               typeOnDesktop(rfb.current, text);
+              typedSink.current?.(text);
               setText("");
             }}
           >
@@ -139,6 +144,7 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
             {t("desktopViewer.connecting")}
           </div>
         )}
+        {teach && <TeachOnComputer session={teach} screen={screen} typedSink={typedSink} connected={connection === "connected"} />}
         {connection === "disconnected" && (
           <div role="alert" className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 bg-card/95 p-3 text-center text-[12px] text-ink-secondary">
             <span>{t("desktopViewer.disconnected")}</span>

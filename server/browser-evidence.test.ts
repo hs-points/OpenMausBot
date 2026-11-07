@@ -163,6 +163,24 @@ describe("the browser step store", () => {
     } finally { evidence.detach(); }
   });
 
+  it("keeps a PNG screenshot as .png, and deletes one generation without touching the others", async () => {
+    const evidence = store();
+    await shot(evidence, "thread-1", Buffer.from("kept"));
+    const record = step(evidence, "thread-1", GEN2);
+    const target = evidence.imageTarget("thread-1", GEN2, record.step, "png");
+    if (!("path" in target)) throw new Error(target.skipped);
+    expect(target.path.endsWith(imageFileName(record.step, "png"))).toBe(true);
+    writeFileSync(target.path, Buffer.from("png bytes"));
+    const saved = await evidence.commit(record, target.path);
+    expect(saved.image).toBe(imageFileName(record.step, "png"));
+    expect(evidence.imageFile("thread-1", GEN2, saved.image!)).toMatch(/step-\d+\.png$/u);
+    evidence.removeGeneration("thread-1", GEN2);
+    expect(existsSync(join(evidence.root, "thread-1", GEN2))).toBe(false);
+    expect(evidence.list("thread-1").steps.map((kept) => kept.generation)).toEqual([GEN]);
+    evidence.removeGeneration("thread-1", "../thread-1");
+    expect(existsSync(join(evidence.root, "thread-1", GEN))).toBe(true);
+  });
+
   it("deletes generations after 30 days", async () => {
     const evidence = store();
     await shot(evidence, "thread-1", Buffer.from("old"));
