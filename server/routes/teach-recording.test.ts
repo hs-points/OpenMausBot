@@ -19,7 +19,7 @@ afterEach(async () => { for (const step of cleanup.splice(0)) await step(); });
 const OWNER = { kind: "loopback", trust: "owner", scopes: ["admin"] } as unknown as RequestAuth;
 const MEMBER = { kind: "token", scopes: ["chat"] } as unknown as RequestAuth;
 
-async function serve(options: { enabled?: boolean; auth?: RequestAuth; target?: "none" | "unknown" } = {}) {
+async function serve(options: { enabled?: boolean; auth?: RequestAuth; target?: "none" | "unknown"; editor?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "omb-teach-routes-"));
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
   const evidence = new BrowserEvidence({ root: join(dir, "evidence") });
@@ -39,7 +39,7 @@ async function serve(options: { enabled?: boolean; auth?: RequestAuth; target?: 
       }),
     };
   };
-  const routes = [createTeachRecordingRoutes({ recorder, enabled: () => options.enabled ?? true, target })];
+  const routes = [createTeachRecordingRoutes({ recorder, enabled: () => options.enabled ?? true, target, mayTeach: () => options.editor === true })];
   const server: Server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (!await dispatchRoutes(routes, { req, res, url, path: url.pathname, method: req.method ?? "GET", auth: options.auth ?? OWNER, json, readBody })) json(res, 404, { from: "inline routes" });
@@ -92,6 +92,10 @@ describe("teach on computer routes", () => {
   it("is for the owner only, and only while skill authoring is on", async () => {
     expect((await (await serve({ auth: MEMBER })).post("start", { controlLeaseId: LEASE })).status).toBe(403);
     expect((await (await serve({ enabled: false })).post("start", { controlLeaseId: LEASE })).status).toBe(403);
+  });
+
+  it("lets a team member who can edit the bot teach it", async () => {
+    expect((await (await serve({ auth: MEMBER, editor: true })).post("start", { controlLeaseId: LEASE })).status).toBe(200);
   });
 
   it("refuses non-JSON bodies, bad leases, bad recordings and bad events", async () => {
