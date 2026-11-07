@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { AudioLines, Check, GraduationCap, ListChecks, Paperclip, Phone, Plus, Target, X } from "lucide-react";
+import { AudioLines, Check, CircleDot, GraduationCap, ListChecks, Paperclip, Phone, Plus, Target, X } from "lucide-react";
 import { approvalModeFor } from "../../shared/approval-mode";
 import {
   approvalModeOptions,
@@ -124,7 +124,7 @@ function approvalItem(name: string, choice: ApprovalChoice, simple: boolean): Si
 
 /** The thread's approval level as a small pill that opens its choices: in the Simple composer while it is not the
  * default, and on the bot panel's Details. */
-export function TeachTaskButton({ onClick }: { onClick: () => void }) {
+export function TeachTaskButton({ onClick, records = false }: { onClick: () => void; records?: boolean }) {
   return (
     <button
       type="button"
@@ -133,7 +133,7 @@ export function TeachTaskButton({ onClick }: { onClick: () => void }) {
       title={t("composer.teachTask")}
       className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink"
     >
-      <GraduationCap size={16} strokeWidth={1.75} absoluteStrokeWidth />
+      {records ? <CircleDot size={16} strokeWidth={1.75} absoluteStrokeWidth className="text-danger" /> : <GraduationCap size={16} strokeWidth={1.75} absoluteStrokeWidth />}
     </button>
   );
 }
@@ -168,10 +168,12 @@ export function ApprovalChip({ choice, quiet = false }: { choice: ApprovalChoice
  * holds what its narrow composer has no room for: the thread's approval level, the call mode and where the bot works,
  * each running the handler its Advanced button runs. With attaching the only choice, the + opens the file picker.
  */
-export function ComposerPlusMenu({ onAttach, goal, teach, approval, callBotId, extraItems = [], circle = false }: {
+export function ComposerPlusMenu({ onAttach, goal, teach, teachRecords = false, approval, callBotId, extraItems = [], circle = false }: {
   onAttach: () => void;
-  /** Starts a /learn draft in the field, where the composer offers /learn. */
+  /** Starts a /learn draft in the field, where the composer offers /learn; on a Local VM, records the task instead. */
   teach?: () => void;
+  /** Teach a task records on the bot's computer: the record mark instead of the cap. */
+  teachRecords?: boolean;
   /** Entries a phone composer moves here from its hidden buttons, such as where the bot works. */
   extraItems?: SidebarMenuItem[];
   /** The phone dock: a round button of its own beside the field, not a small chip inside it. */
@@ -203,7 +205,7 @@ export function ComposerPlusMenu({ onAttach, goal, teach, approval, callBotId, e
       trailing: goal.on ? check : undefined,
       onSelect: goal.onToggle,
     } satisfies SidebarMenuItem] : []),
-    ...(teach ? [{ key: "teach", label: t("composer.teachTask"), icon: <GraduationCap size={16} />, onSelect: teach } satisfies SidebarMenuItem] : []),
+    ...(teach ? [{ key: "teach", label: t("composer.teachTask"), icon: teachRecords ? <CircleDot size={16} className="text-danger" /> : <GraduationCap size={16} />, onSelect: teach } satisfies SidebarMenuItem] : []),
     ...extraItems,
     ...(approval ? [approvalItem(approval.name, approval.choice, simple)] : []),
     ...(callBotId === undefined ? [] : CALL_MODES.map((entry, index): SidebarMenuItem => {

@@ -16,7 +16,9 @@ No Docker, real desktop or user data. Ctrl-C stops it and deletes the folder.
 
 Open the printed URL (skip the welcome by `PUT /api/config` with
 `{"onboarding":{"completedAt":"…","version":1},"profile":{"name":"Owner"}}`), open Ada's
-screen panel and press **Teach on computer**.
+screen panel and press **Teach on computer**. The composer's + menu → **Teach a
+task** (red record icon for a Local VM bot) opens the panel and does the same,
+even when the panel was closed.
 
 1. The desktop opens full size in take-control mode with the banner and a red
    **Start recording**; **Not now** closes it.

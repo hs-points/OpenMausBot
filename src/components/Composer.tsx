@@ -84,6 +84,8 @@ import {
   doubleEnterSteersQueue,
 } from "./ComposerQueuedMessages";
 import { skillAuthoringEnabled } from "@/lib/feature-flags";
+import { effectivePlace } from "@/lib/place";
+import { requestTeachRecording } from "@/lib/teach-request";
 import { mentionChoicesForQuery, mentionQueryAt } from "@/lib/mentions"; import { mentionPicksFor, restoreMentionPicks } from "@/lib/mention-picks";
 import { serializeThreadRefs, threadTokenFromPaste, threadTokenSpacing } from "@/lib/thread-refs";
 import {
@@ -398,7 +400,13 @@ export function Composer({
       inputRef.current?.setSelectionRange(next.caret, next.caret);
     });
   };
+  // On a Local VM, Teach a task records the owner doing it: the screen card takes control and starts recording.
+  const teachRecords = Boolean(profile && !group && effectivePlace(profile, composerTask) === "vm");
   const teachTask = () => {
+    if (teachRecords && bot) {
+      requestTeachRecording(bot.id);
+      return dispatch({ type: "toggleComputer", open: true, botId: bot.id });
+    }
     const learn = "/learn ";
     editText(learn + text.replace(/^\/learn\s*/, "").trimStart());
     setCaret(learn.length);
@@ -775,6 +783,7 @@ export function Composer({
               onAttach={() => fileInput.current?.click()}
               goal={goal}
               teach={canLearn ? teachTask : undefined}
+              teachRecords={teachRecords}
               approval={approvalChoice && modeBot && { name: modeBot.name, choice: approvalChoice }}
               callBotId={bot && !group ? bot.id : undefined}
               place={modeBot && !remoteClient && advanced ? {
@@ -802,7 +811,7 @@ export function Composer({
           />
           {!locked && !singleRow && (
             <div className={cn("flex items-center gap-1", simpleDock ? "shrink-0" : "flex-wrap")}>
-              {simpleDock && <ComposerPlusMenu onAttach={() => fileInput.current?.click()} goal={goal} teach={canLearn ? teachTask : undefined} />}
+              {simpleDock && <ComposerPlusMenu onAttach={() => fileInput.current?.click()} goal={goal} teach={canLearn ? teachTask : undefined} teachRecords={teachRecords} />}
               {advanced && <button
                 type="button"
                 onClick={() => fileInput.current?.click()}
@@ -812,7 +821,7 @@ export function Composer({
               >
                 <Paperclip size={16} strokeWidth={1.75} absoluteStrokeWidth />
               </button>}
-              {advanced && canLearn && <TeachTaskButton onClick={teachTask} />}
+              {advanced && canLearn && <TeachTaskButton onClick={teachTask} records={teachRecords} />}
               {/* Simple mode shows a mode's chip only while it is on, so a choice made in the + menu or the bot panel stays in view. */}
               {goal && (advanced || goal.on) && <GoalToggle {...goal} compact={simpleDock} />}
               {advanced && approvalChoice && <ApprovalModeSelector {...approvalChoice} />}

@@ -5,12 +5,13 @@ import { appendComposerDraft } from "@/lib/drafts";
 import { skillAuthoringEnabled } from "@/lib/feature-flags";
 import { t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/random-uuid";
+import { onTeachRecordingRequest, takeTeachRecordingRequest, teachRecordingRequested } from "@/lib/teach-request";
 import { useStore, type Bot } from "@/state/store";
 import { takeDesktop, type ComputerTakeover } from "./computer-takeover";
 import type { TeachSession } from "./TeachOnComputer";
 
 /** The computer card's Teach on computer action: takes the Local VM desktop full size with the teach banner over it. */
-export function useTeachOnComputer({ bot, takeover, live, ready, busy, setPending, setError, handBack }: {
+export function useTeachOnComputer({ bot, takeover, live, ready, busy, setPending, setError, handBack, showComputer }: {
   bot: Bot;
   takeover: ComputerTakeover;
   /** This view has a live desktop to drive. */
@@ -21,6 +22,8 @@ export function useTeachOnComputer({ bot, takeover, live, ready, busy, setPendin
   setPending: (pending: boolean) => void;
   setError: (error: Error | string | null) => void;
   handBack: () => void;
+  /** Brings the panel to its computer tab, where the desktop a waiting request records on is shown. */
+  showComputer: () => void;
 }) {
   const { state, dispatch } = useStore();
   const [teaching, setTeaching] = useState(false);
@@ -35,6 +38,17 @@ export function useTeachOnComputer({ bot, takeover, live, ready, busy, setPendin
     setTeaching(true);
     if (!await takeDesktop(takeover, true, setPending, setError)) setTeaching(false);
   };
+
+  // The composer's Teach a task: shows the computer tab at once, then starts as this action would once the desktop is live.
+  const [requests, setRequests] = useState(0);
+  useEffect(() => onTeachRecordingRequest(() => setRequests((count) => count + 1)), []);
+  const shown = useRef(-1);
+  useEffect(() => {
+    if (!teachRecordingRequested(bot.id)) return;
+    if (shown.current !== requests) showComputer();
+    shown.current = requests;
+    if (ready && live && !busy && takeTeachRecordingRequest(bot.id)) void start();
+  });
 
   const session: TeachSession | undefined = teaching ? {
     botId: bot.id,
