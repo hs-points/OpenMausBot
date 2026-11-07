@@ -12354,6 +12354,7 @@ ROUTES.push(createBrowserSiteRoutes({
 ROUTES.push(createTeachRecordingRoutes({
   recorder: new TeachRecorder({ evidence: browserEvidence }),
   enabled: () => skillAuthoringEnabled(cfg),
+  mayTeach: (botId, auth) => Boolean(CLOUD_TEAM) && levelOf(auth, botId) === "edit",
   target: (botId, _auth, computer) => {
     const bot = store.bot(botId);
     if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });

@@ -20,6 +20,8 @@ export interface TeachRouteDeps {
   enabled(): boolean;
   /** Null when the bot has no such desktop to record on; throws a 404 for an unknown bot. */
   target(botId: string, auth: RequestAuth, computer: TeachDesktopKind): TeachTarget | null;
+  /** A Cloud team member who can edit this bot may teach it too; the owner and Admins always may. */
+  mayTeach?(botId: string, auth: RequestAuth): boolean;
 }
 
 const LEASE = /^[A-Za-z0-9_-]{16,120}$/u;
@@ -30,7 +32,9 @@ export function createTeachRecordingRoutes(deps: TeachRouteDeps): RouteHandler {
     const m = /^\/api\/bots\/([\w-]+)\/teach\/(start|events|stop|discard)$/u.exec(path);
     if (!m) return PASS;
     if (method !== "POST") return json(res, 405, { error: "method not allowed" });
-    if (!ownerOrAdmin(auth)) return json(res, 403, { error: "only the owner can teach a bot on its computer" });
+    if (!ownerOrAdmin(auth) && deps.mayTeach?.(m[1]!, auth) !== true) {
+      return json(res, 403, { error: "only someone who can edit this bot can teach it on its computer" });
+    }
     if (!deps.enabled()) return json(res, 403, { error: "skill authoring is off" });
     if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
       return json(res, 415, { error: "content-type must be application/json" });
