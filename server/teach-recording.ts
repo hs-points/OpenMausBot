@@ -2,9 +2,11 @@
 // they hold control, kept as one generation of the conversation's step evidence (same folder, modes, caps and 30-day
 // retention as browser steps), then handed to skill authoring as numbered steps.
 //
-// Security invariant: typed text is stored only when a focus check, started before any later focus-changing event was
-// received and finished without one arriving, saw a field that is not a password field. Anything else is stored as
-// hidden, with no length.
+// Security invariant: typed text is stored only when (a) a focus check, started before any later focus-changing event
+// was received and finished without one arriving, saw a field that is not a password field, or (b) the driver reports
+// no focus at all (cua-driver on Linux does not), and the run began with no focus-changing event since a click on a
+// plain text field (not a password field) whose value, read back afterwards, holds the typed text. Anything else is
+// stored as hidden, with no length.
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 
@@ -31,7 +33,16 @@ export type TeachEvent =
   | { kind: "scroll"; x: number; y: number; dx: number; dy: number };
 
 export interface TeachElement { role?: string; label?: string }
-export interface TeachContext { app?: string; window?: string; focused?: TeachElement; hit?: TeachElement }
+export interface TeachContext {
+  app?: string;
+  window?: string;
+  focused?: TeachElement;
+  hit?: TeachElement;
+  /** Identifies the element under the point, so its value can be read back after typing (see `values`). */
+  hitKey?: string;
+  /** Current values of the window's plain text fields (never password fields), by element key. */
+  values?: Record<string, string>;
+}
 
 export interface TeachComputer {
   screenshot(): Promise<{ bytes: Buffer; type: EvidenceImageType } | null>;
@@ -40,7 +51,7 @@ export interface TeachComputer {
 
 export type TeachStep = TaughtStep;
 
-interface Probe { valid: boolean; secret: boolean; field?: TeachElement }
+interface Probe { valid: boolean; secret: boolean; field?: TeachElement; epoch: number; unreported?: boolean }
 
 interface Recording {
   id: string;
@@ -61,6 +72,8 @@ interface Recording {
   /** Bumped when a click or focus-moving key is received; a focus check that saw it change is not trusted. */
   focusEpoch: number;
   pendingProbe: number | null;
+  /** The last left click's field, with the focus epoch it set; used when the driver reports no focus. */
+  lastClick: { epoch: number; key: string; field: TeachElement } | null;
 }
 
 export interface TeachDeps {
@@ -71,6 +84,7 @@ export interface TeachDeps {
 }
 
 const SECRET_ROLE = /password|secure/iu;
+const TEXT_ROLE = /^(entry|text|editable text|text field|textbox|search box|search field|combo box|spin button|terminal|document text|paragraph)$/iu;
 const KEY_NAME = /^[A-Za-z0-9][\w+-]{0,23}$/u;
 const MODIFIERS = new Set<TeachModifier>(["ctrl", "alt", "shift", "meta"]);
 const FOCUS_KEYS = new Set(["Tab", "Enter", "Escape", "F6"]);
@@ -220,6 +234,7 @@ export class TeachRecorder {
       probeSeq: 0,
       focusEpoch: 0,
       pendingProbe: null,
+      lastClick: null,
       ended: false,
     };
     this.recordings.set(input.key, recording);
@@ -240,7 +255,7 @@ export class TeachRecorder {
       if (event.kind === "typing") {
         const id = ++recording.probeSeq;
         recording.pendingProbe = id;
-        recording.probes.set(id, later[index] ? Promise.resolve({ valid: false, secret: true }) : this.probe(recording));
+        recording.probes.set(id, later[index] ? Promise.resolve({ valid: false, secret: true, epoch: -1 }) : this.probe(recording));
         return;
       }
       if (focusMoves(event)) recording.focusEpoch++;
@@ -251,15 +266,22 @@ export class TeachRecorder {
         if (probeId !== null) recording.probes.delete(probeId);
         this.enqueue(recording, async () => {
           const seen = probe ? await probe : null;
-          const visible = seen !== null && seen.valid && !seen.secret;
-          await this.commit(recording, "type", typeSummary(visible ? event.text : null, seen?.field), visible ? { text: event.text } : { hidden: true }, false);
+          let visible = seen !== null && seen.valid && !seen.secret;
+          let field = seen?.field;
+          if (!visible && seen?.unreported) {
+            const clicked = await this.typedIntoClicked(recording, seen.epoch, event.text);
+            if (clicked) { visible = true; field = clicked; }
+          }
+          await this.commit(recording, "type", typeSummary(visible ? event.text : null, field), visible ? { text: event.text } : { hidden: true }, false);
         });
         return;
       }
       recording.pendingProbe = null;
+      const epoch = recording.focusEpoch;
       this.enqueue(recording, async () => {
         if (event.kind === "click") {
           const [context] = await Promise.all([recording.computer.inspect({ x: event.x, y: event.y }).catch(() => null), this.sleep(this.settleMs)]);
+          recording.lastClick = event.button === "left" && context?.hit && context.hitKey ? { epoch, key: context.hitKey, field: context.hit } : null;
           await this.commit(recording, "click", clickSummary(event, context), { x: event.x, y: event.y, button: event.button, double: event.double }, true);
         } else if (event.kind === "key") {
           const settles = FOCUS_KEYS.has(event.key) || event.modifiers.length > 0;
@@ -301,8 +323,21 @@ export class TeachRecorder {
     const epoch = recording.focusEpoch;
     const context = await recording.computer.inspect().catch(() => null);
     const field = context?.focused;
-    if (!field || recording.focusEpoch !== epoch) return { valid: false, secret: true, ...(field ? { field } : {}) };
-    return { valid: true, secret: isSecretField(field), field };
+    // No focus reported: the fallback (typedIntoClicked) judges by the click before `epoch` and a value read-back, so a
+    // focus change during this check does not void it.
+    if (!field) return { valid: false, secret: true, epoch, unreported: context !== null };
+    if (recording.focusEpoch !== epoch) return { valid: false, secret: true, epoch, field };
+    return { valid: true, secret: isSecretField(field), field, epoch };
+  }
+
+  /** For a driver that reports no focus: the last-clicked plain text field, if nothing moved focus between that click
+   * and the start of typing and the field's value now holds the typed text. Otherwise null (the text stays hidden). */
+  private async typedIntoClicked(recording: Recording, epoch: number, typed: string): Promise<TeachElement | null> {
+    const click = recording.lastClick;
+    if (!click || click.epoch !== epoch || isSecretField(click.field) || !TEXT_ROLE.test(click.field.role ?? "")) return null;
+    const context = await recording.computer.inspect().catch(() => null);
+    const value = context?.values?.[click.key];
+    return typeof value === "string" && value.includes(typed) ? click.field : null;
   }
 
   private enqueue(recording: Recording, work: () => Promise<void>): void {
@@ -368,11 +403,32 @@ const elementOf = (element: Json): TeachElement => {
   return out;
 };
 
-/** Reads app, window, focused element and the smallest element under the point from list_windows + get_window_state. */
+const contains = (rect: { x: number; y: number; w: number; h: number } | null, point: { x: number; y: number }) =>
+  rect !== null && point.x >= rect.x && point.y >= rect.y && point.x <= rect.x + rect.w && point.y <= rect.y + rect.h;
+/** Desktop background, panels and docks: never the window someone is working in unless they clicked on one. */
+const CHROME_WINDOW = /^(xfdesktop|xfce4-panel|plasmashell|gnome-shell|desktop|panel|dock|tint2|polybar)$/iu;
+const zIndex = (window: Json) => (typeof window.z_index === "number" ? window.z_index : -1);
+
+/** The window being worked in: one the driver flags as focused; else the topmost under the point; else the topmost
+ * window that is not the desktop or a panel. cua-driver on Linux sends no focus flag, only `z_index` (higher is on top). */
+function pickWindow(windows: Json[], point?: { x: number; y: number }): Json | undefined {
+  const flagged = windows.find((candidate) => candidate.focused === true || candidate.is_focused === true || candidate.active === true);
+  if (flagged) return flagged;
+  const shown = windows.filter((candidate) => candidate.is_on_screen !== false);
+  const top = (list: Json[]) => list.reduce<Json | undefined>((best, candidate) => (!best || zIndex(candidate) > zIndex(best) ? candidate : best), undefined);
+  const under = point ? top(shown.filter((candidate) => contains(box(candidate), point))) : undefined;
+  if (under) return under;
+  if (!shown.some((candidate) => typeof candidate.z_index === "number")) return windows[0];
+  return top(shown.filter((candidate) => !CHROME_WINDOW.test(text(candidate, ["app_name", "owner_name", "application"]) ?? "")
+    && !CHROME_WINDOW.test(text(candidate, ["title", "name"]) ?? ""))) ?? top(shown);
+}
+
+/** Reads app, window, focused element, the smallest element under the point and the window's text-field values
+ * from list_windows + get_window_state (element tree). */
 export async function inspectDesktop(call: (tool: string, args: Json) => Promise<unknown>, point?: { x: number; y: number }): Promise<TeachContext | null> {
   const listed = driverStructured(await call("list_windows", {}));
   const windows = Array.isArray(listed?.windows) ? listed.windows.filter(isJson) : [];
-  const window = windows.find((candidate) => candidate.focused === true || candidate.is_focused === true || candidate.active === true) ?? windows[0];
+  const window = pickWindow(windows, point);
   if (!window) return null;
   const context: TeachContext = {};
   const app = text(window, ["app_name", "owner_name", "application"]);
@@ -381,19 +437,33 @@ export async function inspectDesktop(call: (tool: string, args: Json) => Promise
   if (title) context.window = title;
   const pid = window.pid, windowId = window.window_id ?? window.id;
   if (typeof pid !== "number" || typeof windowId !== "number") return context;
-  const state = driverStructured(await call("get_window_state", { pid, window_id: windowId }));
+  const state = driverStructured(await call("get_window_state", { pid, window_id: windowId, tree_format: "elements" }));
   const elements = Array.isArray(state?.elements) ? state.elements.filter(isJson) : [];
   const focused = elements.find(focusedFlag);
   if (focused) context.focused = elementOf(focused);
+  const keyOf = (element: Json) => {
+    const rect = box(element);
+    const found = elementOf(element);
+    return JSON.stringify([windowId, found.role ?? "", found.label ?? "", rect ? [rect.x, rect.y, rect.w, rect.h] : null]);
+  };
+  const values: Record<string, string> = {};
+  for (const element of elements) {
+    const found = elementOf(element);
+    if (typeof element.value === "string" && TEXT_ROLE.test(found.role ?? "") && !isSecretField(found)) values[keyOf(element)] = element.value;
+  }
+  if (Object.keys(values).length) context.values = values;
   if (point) {
     let best: { element: Json; area: number } | null = null;
     for (const element of elements) {
       const rect = box(element);
-      if (!rect || point.x < rect.x || point.y < rect.y || point.x > rect.x + rect.w || point.y > rect.y + rect.h) continue;
+      if (!rect || !contains(rect, point)) continue;
       const area = rect.w * rect.h;
       if (!best || area < best.area) best = { element, area };
     }
-    if (best) context.hit = elementOf(best.element);
+    if (best) {
+      context.hit = elementOf(best.element);
+      context.hitKey = keyOf(best.element);
+    }
   }
   return context;
 }

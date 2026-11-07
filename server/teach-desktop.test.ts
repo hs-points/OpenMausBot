@@ -28,7 +28,7 @@ describe("the self-hosted VPS desktop for Teach on computer", () => {
     expect(await computer.inspect({ x: 10, y: 10 })).toMatchObject({ app: "Firefox", window: "Invoices", hit: { label: "Email" } });
     expect(calls[0]!.slice(0, 2)).toEqual(["-H", "ssh://kvm8"]);
     expect(calls[0]).toContain("0123456789ab");
-    expect(calls[1]).toContain(JSON.stringify({ pid: 7, window_id: 3 }));
+    expect(calls[1]).toContain(JSON.stringify({ pid: 7, window_id: 3, tree_format: "elements" }));
     expect(await computer.screenshot()).toEqual({ bytes: Buffer.from("frame"), type: "jpg" });
   });
 

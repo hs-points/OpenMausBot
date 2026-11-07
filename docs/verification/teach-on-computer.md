@@ -11,7 +11,10 @@ It builds the renderer, starts the real server on 127.0.0.1 with a temporary
 home and data folder and the fake engine, and creates Ada on a Local VM. Only
 `container-computer.ts` is replaced (`server/testing/teach-vm-hooks.mjs`): a
 drawn sign-in window served to the app's own noVNC viewer by a loopback RFB
-server, with screenshots and an AT-SPI-shaped window tree from the same state.
+server, with screenshots and a window tree from the same state, shaped like cua-driver 0.37 on Linux (as read on the KVM8
+desktop image): no focus flag on windows or fields, windows stacked by `z_index`, and field
+values (none for a password field). So typed text is shown only through the clicked-field
+read-back.
 No Docker, real desktop or user data. Ctrl-C stops it and deletes the folder.
 
 Open the printed URL (skip the welcome by `PUT /api/config` with
