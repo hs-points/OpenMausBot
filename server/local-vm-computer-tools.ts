@@ -1,10 +1,10 @@
-import type { containerComputerMcp } from "./container-computer.ts";
 import { CONTROL_ACT_WITHIN_MS, CONTROL_WAITED, controlRefusal, type ControlState } from "./control-client.ts";
 import { HARNESS_CALL_BUDGET_MS } from "./harness-budget.ts";
 import { openAppClient } from "./mcp-app-connections.ts";
 
+/** Host-side MCP child for a boxed turn: Local VM containers and the self-hosted VPS both run through here. */
 export async function localVmComputerRpc(request: unknown, deps: {
-  server: ReturnType<typeof containerComputerMcp>;
+  server: { command: string; args: string[]; env: Record<string, string> };
   gate(): Promise<ControlState>;
   assertActive(): void;
   assertClaim(): void;

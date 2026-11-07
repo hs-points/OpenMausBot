@@ -1644,6 +1644,8 @@ type InternalCapability = {
   orphanExpiresAt: number;
   localVmTarget?: LocalVmTarget;
   localVmConnection?: { runtime: Runtime; target: LocalVmTarget; calls: Promise<void> };
+  /** Boxed VPS turn: the host runs the fixed vps-container-mcp child; the box only holds the harness proxy. */
+  vpsConnection?: { server: { command: string; args: string[]; env: Record<string, string> }; resource: string; calls: Promise<void> };
   teamComputerId?: string;
   /** Set only by the harness at attach; null: mounted, and the first call creates or wakes the Boat. */
   boxId?: string | null;
@@ -5903,6 +5905,23 @@ function localVmComputerTools(runtime: Runtime, control: { url: string; token: s
   };
 }
 
+/** Bot box has no network and no ~/.ssh: the box gets the harness proxy and the host runs the VPS MCP child with this fixed alias and container. */
+function vpsComputerTools(
+  vpsMcp: { command: string; args: string[]; env: Record<string, string> },
+  control: { url: string; token: string },
+  resource: string,
+) {
+  if (!botBox.enabled()) return { ...vpsMcp, env: { ...vpsMcp.env, OMB_CONTROL_URL: control.url, OMB_CONTROL_TOKEN: control.token } };
+  const capability = internalCapabilities.get(control.token);
+  if (!capability || capability.kind !== "computer") throw new Error("VPS computer capability was not created");
+  capability.vpsConnection = { server: vpsMcp, resource, calls: Promise.resolve() };
+  return {
+    command: process.execPath,
+    args: [SPAWNED_PROXIES.harnessMcp, "computer"],
+    env: { ...AGENTS_NODE_FLAG, OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`, [harnessMcpTokenEnv("computer")]: control.token },
+  };
+}
+
 /** `ask`: the person did not pick this computer themselves (an Auto pin), so the first screen call asks them once. */
 async function mountHostComputer(owner: TurnOwner, botId: string, providerSupportsLocal: boolean, onRejected: (failure: string, error?: unknown) => void, ask = false, journal = false) {
   if (!shouldMountLocalComputer({ requested: "local", hostPlatform: process.platform, providerSupportsLocal })) {
@@ -5946,10 +5965,7 @@ async function mountBotVps(
     },
   });
   return {
-    integration: {
-      ...vpsMcp,
-      env: { ...vpsMcp.env, OMB_CONTROL_URL: vpsControl.url, OMB_CONTROL_TOKEN: vpsControl.token },
-    },
+    integration: vpsComputerTools(vpsMcp, vpsControl, vpsResource),
   };
 }
 
@@ -13329,6 +13345,25 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               if (localVmThreadTargets.get(internalCapability.threadId)?.key !== target.key ||
                   owner?.threadId !== internalCapability.threadId || owner.botId !== internalCapability.botId) {
                 throw Object.assign(new Error("This turn no longer has its Local VM"), { status: 403 });
+              }
+            },
+          });
+          if (body?.method !== "tools/call") return json(res, 200, { result: await perform() });
+          const result = connection.calls.then(perform);
+          connection.calls = result.then(() => {}, () => {});
+          return json(res, 200, { result: await result });
+        }
+        if (internalCapability.vpsConnection) {
+          const connection = internalCapability.vpsConnection;
+          const arrivedAt = Date.now();
+          const perform = () => localVmComputerRpc(body, {
+            server: connection.server, signal: abort.signal, arrivedAt,
+            gate: () => computerCallGate(internalCapability, abort.signal),
+            assertActive: requireActiveInternalCapability,
+            assertClaim: () => {
+              const held = turnComputerResources.get(internalCapability.threadId);
+              if (held?.resource !== connection.resource || held.owner.generation !== internalCapability.generation) {
+                throw Object.assign(new Error("This turn no longer has its VPS computer"), { status: 403 });
               }
             },
           });
