@@ -12357,7 +12357,6 @@ ROUTES.push(createTeachRecordingRoutes({
   target: (botId, _auth, computer) => {
     const bot = store.bot(botId);
     if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
-    if (CLOUD_HOME) return null;
     const controlKey = botComputerControlKey(bot);
     if (computer === "vps") {
       if (bot.cloudBackend !== "vps" || inheritedTeamComputer(bot)) return null;
@@ -12367,6 +12366,8 @@ ROUTES.push(createTeachRecordingRoutes({
         computer: () => vpsTeachComputer(vpsConfigForBot(cfg, bot), bot.id),
       };
     }
+    // A Cloud home or team machine has no Local VM of its own; its bots' self-hosted cloud desktops (above) still record.
+    if (CLOUD_HOME) return null;
     const target = localVmTargetForStatus(bot.id, bot.threadId);
     return {
       key: target.key, botId: bot.id, threadId: bot.threadId, desktop: `${bot.name}'s Linux desktop`,
