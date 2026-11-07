@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { RESERVED_MCP_NAMES, slugMcpName } from "../shared/mcp-name.ts";
 import type { McpServerSpec, RemoteMcpSpec, StdioMcpSpec } from "./contracts.ts";
+import { BLOCKED_AGENT_MCP_ERROR, runsBlockedAgentCli } from "./hsp-blocked-mcp.ts";
 
 export { importedMcpServerName } from "../shared/mcp-name.ts";
 
@@ -250,6 +251,7 @@ function parseStdio(raw: unknown, mutation: boolean, existing?: StoredMcpServer)
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid MCP server." };
   }
+  if (runsBlockedAgentCli(parsed.data.command, parsed.data.args ?? [])) return { ok: false, error: BLOCKED_AGENT_MCP_ERROR };
   const incoming = parsed.data.env ?? {};
   if (Object.keys(incoming).length > MAX_ENV) {
     return { ok: false, error: `Use at most ${MAX_ENV} environment variables.` };
