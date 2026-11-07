@@ -33,7 +33,10 @@ export function serverKind(config: Pick<ConfigStatus, "cloudHome"> | null | unde
   return platform === "darwin" ? "mac" : platform === "win32" ? "pc" : "linux";
 }
 
-function engineFacts(instance: InstanceInfo | undefined, model: string | undefined): PlaceFacts["engine"] {
+function engineFacts(instance: InstanceInfo | undefined, model: string | undefined, unseen = false): PlaceFacts["engine"] {
+  // A member's session never sees the engine list (it is admin-only), so an engine it cannot see is not one that
+  // cannot use a desktop: leave that call to the server, which refuses a turn the engine cannot do.
+  if (!instance && unseen) return { name: model || "", model: model || "", computer: true, browser: true, signedIn: true };
   const label = instance?.models?.options?.find((option) => option.id === model)?.label;
   return {
     name: instance?.displayName || instance?.driverKind || model || "",
@@ -63,7 +66,7 @@ export function placeFacts(input: {
     plan: seat.plan,
     boat: config?.box?.configured ? (config.box.included ? "included" : "own-key") : "none",
     backend: bot.cloudBackend === "vps" ? "vps" : "box",
-    engine: engineFacts(instance, bot.modelSelection.model),
+    engine: engineFacts(instance, bot.modelSelection.model, input.instances.length === 0),
     toolsAllowComputer: canUseMcpServer(bot.toolScope, "computer"),
     browserOn: builtInBrowserEnabled(config) && browserAvailable(config),
     role: seat.role,
