@@ -19,6 +19,7 @@ import { appSandboxAllowed, serviceSlugFor } from "../connector-verdict.ts";
 import { type McpOAuthManager, type McpRefreshOutcome, type McpSignInPhase, withMcpSignIn, withoutPendingSignIn } from "../mcp-oauth.ts";
 import { isRemoteMcpServer, parseStoredMcpServer, type McpOAuthClientConfig } from "../mcp-registry.ts";
 import { knownMcpServerApp, type McpServerApp } from "../mcp-server-app.ts";
+import { personKey } from "../person-key.ts";
 import { OWN_APPS_SERVER } from "../../shared/own-apps.ts";
 import { managedComposioBrokerOff } from "../composio-broker-access.ts";
 import { projectApiKey } from "../composio-session.ts";
@@ -238,6 +239,12 @@ export function createTeamConnectionsHost(deps: TeamConnectionsHostDeps) {
     nameOf,
     via,
     ownAppsNeedKey,
+    /** On a Team Cloud only: the person this turn acts for is the member with this email. */
+    actsForMember(threadId: string, generation: string | undefined, email: string): boolean {
+      if (!team) return false;
+      const person = actingFor(threadId, generation);
+      return person !== null && person === personKey({ id: "", email });
+    },
     /** Off a Team Cloud, always; on one, the person this turn acts for is its owner or an admin, as Settings requires. */
     actsForAdmin(threadId: string, generation?: string): boolean {
       if (!team) return true;
