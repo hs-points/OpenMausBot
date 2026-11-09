@@ -29,7 +29,7 @@ describe("VPS computer settings", () => {
     expect(vpsResourceArgs(undefined)).toEqual(["--memory", "4g", "--memory-swap", "4g", "--cpus", "2"]);
     expect(vpsResourceArgs({ memoryGb: 10, cpus: 4 })).toEqual(["--memory", "10g", "--memory-swap", "10g", "--cpus", "4"]);
     expect(vpsCapabilityArgs(undefined)).toEqual(desktopCapArgs("docker"));
-    expect(vpsCapabilityArgs({ rootCapable: true })).toEqual([]);
+    expect(vpsCapabilityArgs({ rootCapable: true })).toEqual(["--cap-drop", "NET_RAW"]);
   });
 
   it("accepts default capabilities only for a root-capable PC, and nothing else looser", () => {
@@ -39,6 +39,11 @@ describe("VPS computer settings", () => {
     expect(vpsSecurityAccepted(rootCapable, undefined)).toBe(false);
     expect(vpsSecurityAccepted(rootCapable, { memoryGb: 10 })).toBe(false);
     expect(vpsSecurityAccepted(rootCapable, { rootCapable: true })).toBe(true);
+    expect(vpsSecurityAccepted({ ...rootCapable, CapDrop: ["CAP_NET_RAW"] }, { rootCapable: true })).toBe(true);
+    expect(vpsSecurityAccepted({ ...rootCapable, CapDrop: ["NET_RAW"] }, { rootCapable: true })).toBe(true);
+    expect(vpsSecurityAccepted({ ...rootCapable, CapDrop: ["NET_RAW", "CHOWN"] }, { rootCapable: true })).toBe(false);
+    expect(vpsSecurityAccepted({ ...rootCapable, CapAdd: ["NET_ADMIN"] }, { rootCapable: true })).toBe(false);
+    expect(vpsSecurityAccepted({ ...rootCapable, CapDrop: ["NET_RAW"] }, undefined)).toBe(false);
     expect(vpsSecurityAccepted({ ...rootCapable, Privileged: true }, { rootCapable: true })).toBe(false);
     expect(vpsSecurityAccepted({ ...rootCapable, CapAdd: ["SYS_ADMIN"] }, { rootCapable: true })).toBe(false);
     expect(vpsSecurityAccepted({ ...rootCapable, PidMode: "host" }, { rootCapable: true })).toBe(false);

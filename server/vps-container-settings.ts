@@ -10,18 +10,24 @@ export function vpsResourceArgs(settings: VpsComputerSettings | undefined): stri
   return ["--memory", memory, "--memory-swap", memory, "--cpus", String(settings?.cpus ?? VPS_DEFAULT_CPUS)];
 }
 
-/** Root-capable PCs keep Docker's default capability set; every other PC gets upstream's hardened desktop set
+/** Root-capable PCs keep Docker's default capability set minus NET_RAW (HSP: no raw packets, so no ARP spoofing on
+ * the shared bridge and no AF_PACKET kernel surface); every other PC gets upstream's hardened desktop set
  * (drop ALL, then only what a root package install needs). */
 export function vpsCapabilityArgs(settings: VpsComputerSettings | undefined): string[] {
-  return settings?.rootCapable ? [] : desktopCapArgs("docker");
+  return settings?.rootCapable ? ["--cap-drop", "NET_RAW"] : desktopCapArgs("docker");
 }
+
+const capName = (cap: string) => cap.toUpperCase().replace(/^CAP_/, "");
 
 /** Strict hardening for every PC. A root-capable PC may instead carry Docker's default capabilities exactly
  * (no drop, no add): everything else in the contract, privileged and namespaces included, is still checked. */
 export function vpsSecurityAccepted(config: DockerHardeningConfig | undefined, settings: VpsComputerSettings | undefined): boolean {
   if (dockerSecurityIsHardened(config, { restartPolicy: "any" })) return true;
   if (!settings?.rootCapable || !config) return false;
-  if ((config.CapDrop ?? []).length > 0 || (config.CapAdd ?? []).length > 0) return false;
+  // HSP: Docker's defaults minus NET_RAW is the target; exactly Docker's defaults is still accepted, so a PC made
+  // before that change is never recreated (its disk lives in the container layer).
+  const drop = (config.CapDrop ?? []).map(capName);
+  if ((config.CapAdd ?? []).length > 0 || !(drop.length === 0 || (drop.length === 1 && drop[0] === "NET_RAW"))) return false;
   return dockerSecurityIsHardened({ ...config, CapDrop: ["ALL"], CapAdd: ["SETUID", "SETGID"] }, { restartPolicy: "any" });
 }
 
