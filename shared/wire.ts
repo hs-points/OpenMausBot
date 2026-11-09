@@ -329,9 +329,7 @@ export interface WireBot extends DefaultBotFields, BotAccessFields {
   autoStartVps?: boolean;
   /** This bot's own SSH config alias for its managed VPS computer; absent
    * means the default server from Settings → API keys. */
-  vpsAlias?: string;
-  /** This bot's own cloud computer settings (root-capable, CPU/RAM, coding tools); Admin-only. */
-  vpsComputer?: VpsComputerSettings;
+  vpsAlias?: string; /** This bot's own cloud computer settings (root-capable, CPU/RAM, coding tools); Admin-only. */ vpsComputer?: VpsComputerSettings;
   /** where its tasks run their tools; absent = each task's own folder. Its .claude/settings.json (else the bot folder's) applies in all. */
   cwd?: string;
   /** Auto mode: the bot approves its own tool permissions. */
