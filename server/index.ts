@@ -238,7 +238,7 @@ import { createOneOnOneGoals } from "./host/one-on-one-goals.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { openCodeProviderKeysAllowed, setOpenCodeProviderKeyPolicy } from "./drivers/acp/opencode-go.ts";
-import { openCardRows, readMessageText, recallMessages, recentMessages, closeMessageSearch, closeMessageDb, chatFollowups, cancelledChatFollowup, settleChatFollowups, threadsReferencing, logNotification, lastRowAt, threadsWithCardsSince } from "./message-db.ts";
+import { openCardRows, readMessageText, recallMessages, recentMessages, closeMessageSearch, closeMessageDb, chatFollowups, cancelledChatFollowup, threadsReferencing, logNotification, lastRowAt, threadsWithCardsSince } from "./message-db.ts";
 import { briefCrossingLabel, claimRecallCrossings, recallCrossingLabel } from "./recall-disclosure.ts";
 import { parseSince, parseUntil, recentWork, recentWorkPrompt, turnOutcomeLine } from "./recent-work.ts";
 import { chiefEscalationsEnabled, NEEDS_INPUT_GATE, peerApprovalGate, RAISED_GATE } from "./escalations.ts";
@@ -489,7 +489,7 @@ import type { WebhookTrigger } from "../shared/webhooks.ts";
 import { AGENTS_NODE_FLAG, SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { agentsProxyLaunch, agentsToolBridgeEnv, applyAgentsBridge, bridgedToolTitle, turnEngine } from "./agents-bridge-switch.ts"; import { agentsServerEnv, COMPUTER_OFF_REFUSAL, computerPickRefusal, directTurnKind, roomSkillsRefusal, type TurnKind } from "./agents-turn.ts";
 import { harnessMcpTokenEnv } from "./harness-mcp-token.ts";
-import { localVmComputerRpc } from "./local-vm-computer-tools.ts";
+import { boxedComputerProxy, serveBoxedComputerCall, type BoxedComputerConnection, type McpServer } from "./boxed-computer-bridge.ts";
 import {
   loadBundledSkills,
   loadUserSkills,
@@ -604,6 +604,10 @@ import { createInternalMcpRoutes } from "./routes/internal-mcp.ts";
 import { createInternalThreadRoutes } from "./routes/internal-threads.ts";
 import { createBrowserEvidenceRoutes } from "./routes/browser-evidence.ts";
 import { createTeachRecordingRoutes } from "./routes/teach-recording.ts";
+import { createTeachTargets } from "./host/teach-targets.ts";
+import { recoverInterruptedFollowups } from "./host/boot-followups.ts";
+import { createChannelMembers } from "./host/channel-members.ts";
+import { createBotComputerAccessRoutes } from "./routes/bot-computer-access.ts";
 import { TeachRecorder } from "./teach-recording.ts";
 import { localVmTeachComputer, vpsTeachComputer } from "./teach-desktop.ts";
 import { createSignInCardRoutes } from "./routes/sign-in-cards.ts";
@@ -1617,9 +1621,8 @@ type InternalCapability = {
   openedThreads: number;
   orphanExpiresAt: number;
   localVmTarget?: LocalVmTarget;
-  localVmConnection?: { runtime: Runtime; target: LocalVmTarget; calls: Promise<void> };
-  /** Boxed VPS turn: the host runs the fixed vps-container-mcp child; the box only holds the harness proxy. */
-  vpsConnection?: { server: { command: string; args: string[]; env: Record<string, string> }; resource: string; calls: Promise<void> };
+  /** Boxed Local VM or VPS turn: the host runs the computer's MCP child; the box only holds the harness proxy. */
+  computerConnection?: BoxedComputerConnection;
   teamComputerId?: string;
   /** Set only by the harness at attach; null: mounted, and the first call creates or wakes the Boat. */
   boxId?: string | null;
@@ -2790,24 +2793,7 @@ function defaultsPresetFor(body: Record<string, unknown>, includeNotes: boolean)
   return { preset: built.value, skipped: [...skipped, ...built.skipped] };
 }
 
-function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | { ok: false; error: string } {
-  if (!Array.isArray(value)) return { ok: false, error: "memberIds must be a list of bot IDs" };
-  const invalidIndex = value.findIndex(
-    (id) => typeof id !== "string" || !id.trim() || !store.bot(id),
-  );
-  if (invalidIndex !== -1) {
-    return { ok: false, error: `unknown channel member: ${String(value[invalidIndex])}` };
-  }
-  const memberIds = [...new Set(value as string[])];
-  if (!memberIds.length) return { ok: false, error: "a channel needs at least one bot" };
-  if (memberIds.every((id) => store.bot(id)?.hidden)) {
-    return {
-      ok: false,
-      error: "a channel needs at least one active bot — every member given is archived",
-    };
-  }
-  return { ok: true, memberIds };
-}
+const { checkedMemberIds } = createChannelMembers({ store: { bot: (id) => store.bot(id) } });
 let bootSelection = { instanceId: "", model: "" }; // Settled by one tiny test message through each AI it could be (server/tested-ai.ts).
 const testedAi = createTestedAi({ engine: (instanceId) => registry.get(instanceId), store: () => store, threadBusy, context: selectionContext, changed: () => refreshUnsetModelSelections().then(() => broadcast({ kind: "config", ...configStatus() })),
   saved: () => [cfg.defaultModelSelection, cfg.newBotDefaults?.profile.modelSelection], hosted: () => Boolean(hostedModels), identity: (instanceId) => configIdentity(providerConfigs()[instanceId]), file: join(DATA_DIR, "providers", "ai-checks.json"), forBot: (selection) => withNewBotEffort(selection, cfg.newBots?.effort, registry.get(selection.instanceId)?.adapter.capabilities.effortLevels) });
@@ -5843,41 +5829,32 @@ function cloudEngine(instance: ReturnType<typeof registry.get>, model?: string):
 /** The agent process holds only a turn-scoped capability naming this Boat, never a Boat credential. */
 function cloudComputerTools(botId: string, owner: TurnOwner, boxId: string | null): NonNullable<SendTurnInput["integrations"]>["localComputer"] {
   const control = controlIntegration(botId, owner.threadId, owner.generation, { boxId });
-  return {
-    command: process.execPath,
-    args: [SPAWNED_PROXIES.harnessMcp, "computer"],
-    env: { ...AGENTS_NODE_FLAG, OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`, [harnessMcpTokenEnv("computer")]: control.token },
-    platform: "linux",
-  };
+  return { ...computerProxy(control.token), platform: "linux" };
 }
+const computerProxy = (token: string) => boxedComputerProxy({ harnessMcp: SPAWNED_PROXIES.harnessMcp, nodeEnv: AGENTS_NODE_FLAG, port: PORT, token });
 
+function boxedComputerTools(control: { token: string }, server: () => McpServer, assertClaim: (capability: InternalCapability) => void) {
+  const capability = internalCapabilities.get(control.token);
+  if (!capability || capability.kind !== "computer") throw new Error("Computer capability was not created");
+  capability.computerConnection = { server, assertClaim: () => assertClaim(capability), calls: Promise.resolve() };
+  return computerProxy(control.token);
+}
 function localVmComputerTools(runtime: Runtime, control: { url: string; token: string }, target: LocalVmTarget) {
   if (!botBox.enabled()) return containerComputerMcp(runtime, control, target);
-  const capability = internalCapabilities.get(control.token);
-  if (!capability || capability.kind !== "computer") throw new Error("Local VM computer capability was not created");
-  capability.localVmConnection = { runtime, target, calls: Promise.resolve() };
-  return {
-    command: process.execPath,
-    args: [SPAWNED_PROXIES.harnessMcp, "computer"],
-    env: { ...AGENTS_NODE_FLAG, OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`, [harnessMcpTokenEnv("computer")]: control.token },
-  };
+  return boxedComputerTools(control, () => containerComputerMcp(runtime, undefined, target), (capability) => {
+    const owner = localVmLeaseFor(target).current(localVmOwnerBusy);
+    if (localVmThreadTargets.get(capability.threadId)?.key === target.key && owner?.threadId === capability.threadId && owner.botId === capability.botId) return;
+    throw Object.assign(new Error("This turn no longer has its Local VM"), { status: 403 });
+  });
 }
-
 /** Bot box has no network and no ~/.ssh: the box gets the harness proxy and the host runs the VPS MCP child with this fixed alias and container. */
-function vpsComputerTools(
-  vpsMcp: { command: string; args: string[]; env: Record<string, string> },
-  control: { url: string; token: string },
-  resource: string,
-) {
+function vpsComputerTools(vpsMcp: McpServer, control: { url: string; token: string }, resource: string) {
   if (!botBox.enabled()) return { ...vpsMcp, env: { ...vpsMcp.env, OMB_CONTROL_URL: control.url, OMB_CONTROL_TOKEN: control.token } };
-  const capability = internalCapabilities.get(control.token);
-  if (!capability || capability.kind !== "computer") throw new Error("VPS computer capability was not created");
-  capability.vpsConnection = { server: vpsMcp, resource, calls: Promise.resolve() };
-  return {
-    command: process.execPath,
-    args: [SPAWNED_PROXIES.harnessMcp, "computer"],
-    env: { ...AGENTS_NODE_FLAG, OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`, [harnessMcpTokenEnv("computer")]: control.token },
-  };
+  return boxedComputerTools(control, () => vpsMcp, (capability) => {
+    const held = turnComputerResources.get(capability.threadId);
+    if (held?.resource === resource && held.owner.generation === capability.generation) return;
+    throw Object.assign(new Error("This turn no longer has its VPS computer"), { status: 403 });
+  });
 }
 
 /** `askNow`: read at the first screen call (an Auto pin below Full access, checked live), so the person is asked once then. */
@@ -12389,31 +12366,17 @@ ROUTES.push(createBrowserSiteRoutes({
   list: (target) => listSignedInSites(target),
   signOut: (target, site) => signOutOfSites(target, site),
 }));
+ROUTES.push(createBotComputerAccessRoutes({ mayEdit: (auth, botId) => Boolean(CLOUD_TEAM) && levelOf(auth, botId) === "edit", botName: (botId) => store.bot(botId)?.name }));
 ROUTES.push(createTeachRecordingRoutes({
   recorder: new TeachRecorder({ evidence: browserEvidence }),
   enabled: () => skillAuthoringEnabled(cfg),
   mayTeach: (botId, auth) => Boolean(CLOUD_TEAM) && levelOf(auth, botId) === "edit",
-  target: (botId, _auth, computer) => {
-    const bot = store.bot(botId);
-    if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
-    const controlKey = botComputerControlKey(bot);
-    if (computer === "vps") {
-      if (bot.cloudBackend !== "vps" || inheritedTeamComputer(bot)) return null;
-      return {
-        key: `vps/${bot.id}`, botId: bot.id, threadId: bot.threadId, desktop: `${bot.name}'s cloud desktop`,
-        holds: (leaseId) => computerControl.ownsLease(controlKey, leaseId),
-        computer: () => vpsTeachComputer(vpsConfigForBot(cfg, bot), bot.id),
-      };
-    }
-    // A Cloud home or team machine has no Local VM of its own; its bots' self-hosted cloud desktops (above) still record.
-    if (CLOUD_HOME) return null;
-    const target = localVmTargetForStatus(bot.id, bot.threadId);
-    return {
-      key: target.key, botId: bot.id, threadId: bot.threadId, desktop: `${bot.name}'s Linux desktop`,
-      holds: (leaseId) => computerControl.ownsLease(controlKey, leaseId),
-      computer: () => localVmTeachComputer(target),
-    };
-  },
+  target: createTeachTargets({
+    bot: (id) => store.bot(id), controlKey: botComputerControlKey, inheritsTeamComputer: (bot) => Boolean(inheritedTeamComputer(bot)),
+    ownsLease: (key, leaseId) => computerControl.ownsLease(key, leaseId),
+    vpsComputer: (bot) => vpsTeachComputer(vpsConfigForBot(cfg, bot), bot.id),
+    localVmTarget: localVmTargetForStatus, localVmComputer: localVmTeachComputer, cloudHome: Boolean(CLOUD_HOME),
+  }),
 }));
 ROUTES.push(createBrowserEvidenceRoutes({ evidence: browserEvidence.attach({ onChange: (listener) => store.onChange(listener), threadExists: (id) => Boolean(threadOwner(id)) }), threadExists: (id) => Boolean(threadOwner(id)) }));
 ROUTES.push(createLoginRoutes(botLogins.routes((id) => Boolean(store.bot(id)))));
@@ -13232,46 +13195,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const body = await readInternalBody();
         const abort = new AbortController();
         res.once("close", () => { if (!res.writableEnded) abort.abort(); });
-        if (internalCapability.localVmConnection) {
-          const connection = internalCapability.localVmConnection;
-          const { runtime, target } = connection;
-          const arrivedAt = Date.now();
-          const perform = () => localVmComputerRpc(body, {
-            server: containerComputerMcp(runtime, undefined, target), signal: abort.signal, arrivedAt,
-            gate: () => computerCallGate(internalCapability, abort.signal),
-            assertActive: requireActiveInternalCapability,
-            assertClaim: () => {
-              const owner = localVmLeaseFor(target).current(localVmOwnerBusy);
-              if (localVmThreadTargets.get(internalCapability.threadId)?.key !== target.key ||
-                  owner?.threadId !== internalCapability.threadId || owner.botId !== internalCapability.botId) {
-                throw Object.assign(new Error("This turn no longer has its Local VM"), { status: 403 });
-              }
-            },
-          });
-          if (body?.method !== "tools/call") return json(res, 200, { result: await perform() });
-          const result = connection.calls.then(perform);
-          connection.calls = result.then(() => {}, () => {});
-          return json(res, 200, { result: await result });
-        }
-        if (internalCapability.vpsConnection) {
-          const connection = internalCapability.vpsConnection;
-          const arrivedAt = Date.now();
-          const perform = () => localVmComputerRpc(body, {
-            server: connection.server, signal: abort.signal, arrivedAt,
-            gate: () => computerCallGate(internalCapability, abort.signal),
-            assertActive: requireActiveInternalCapability,
-            assertClaim: () => {
-              const held = turnComputerResources.get(internalCapability.threadId);
-              if (held?.resource !== connection.resource || held.owner.generation !== internalCapability.generation) {
-                throw Object.assign(new Error("This turn no longer has its VPS computer"), { status: 403 });
-              }
-            },
-          });
-          if (body?.method !== "tools/call") return json(res, 200, { result: await perform() });
-          const result = connection.calls.then(perform);
-          connection.calls = result.then(() => {}, () => {});
-          return json(res, 200, { result: await result });
-        }
+        if (internalCapability.computerConnection) return json(res, 200, { result: await serveBoxedComputerCall(internalCapability.computerConnection, body, {
+          signal: abort.signal, gate: () => computerCallGate(internalCapability, abort.signal), assertActive: requireActiveInternalCapability,
+        }) });
         if (internalCapability.boxId === undefined) return json(res, 403, { error: "this turn has no cloud computer" });
         return json(res, 200, { result: await cloudComputerRpc(body, {
           cfg, signal: abort.signal, folder: () => messageFileRootsForThread(internalCapability.botId, internalCapability.threadId)[0],
@@ -15330,11 +15256,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 405, { error: "method not allowed" });
     }
 
-    // A member reaches these through the client allow-list: only one who can edit the bot may watch or steer its screen.
-    m = path.match(/^\/api\/bots\/([\w-]+)\/computer(?:\/(?:control|join|screenshot|viewer-close))?$/);
-    if (m && !auth.scopes.includes("admin") && !(CLOUD_TEAM && levelOf(auth, m[1]) === "edit")) {
-      return json(res, 403, refusalFor(store.bot(m[1])?.name ?? "this bot", "edit"));
-    }
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer$/);
     if (m && method === "GET") {
       const bot = computerPreviewBot(m[1], url);
@@ -15574,34 +15495,7 @@ console.log(describeBrand(loadBrand()));
 
 // Before any row below settles: an interrupted dispatch's words come back with a review notice, never to a model a second time.
 followupAtBoot("");
-for (const row of chatFollowups()) {
-  if (row.kind === "aside") { settleChatFollowups([row.id], null); continue; }
-  if (row.status !== "dispatching" && row.status !== "interrupted") continue;
-  const owned = row.kind === "channel"
-    ? Boolean(store.groupByThread(row.threadId)?.id === row.ownerId)
-    : Boolean(store.taskByThread(row.ownerId, row.threadId));
-  if (!owned) { settleChatFollowups([row.id], "cancelled"); continue; }
-  settleChatFollowups([row.id], "interrupted");
-  const messages = store.messagesFor(row.threadId);
-  const recovered = messages.find((message) => message.queueId === row.id && message.role === "user") ?? store.appendMessage(row.threadId, {
-    role: "user", kind: "text", text: row.payload.text, replyToId: row.payload.replyToId,
-    sendId: row.payload.sendId, queueId: row.id, sender: row.payload.sender,
-    ...(row.kind === "channel" ? { channelMode: row.payload.mode, via: row.payload.via } : {}),
-    ...(row.kind === "bot" ? spokenLineFields(row.payload.via, row.payload.callId) : {}),
-  });
-  const recoveredTask = row.kind !== "channel" ? store.taskByThread(row.ownerId, row.threadId) : undefined;
-  const order = store.activePath(row.threadId).filter(isContextMessage).map((m) => m.id);
-  for (const [instanceId, state] of Object.entries(recoveredTask?.handedMessages ?? {})) {
-    if (state.session !== undefined) store.setHandedMessages(row.ownerId, row.threadId, instanceId, recordHanded(state, order, [recovered.id]));
-  }
-  if (!messages.some((message) => message.queueId === row.id && message.kind === "activity")) {
-    store.appendMessage(row.threadId, {
-      role: "bot", kind: "activity", queueId: row.id,
-      tool: noticeTool("chat.notice.followupInterrupted", undefined, { ok: false }),
-    });
-  }
-  settleChatFollowups([row.id], null);
-}
+recoverInterruptedFollowups({ store });
 restoreSteeredMessages();
 restoreChannelMessages();
 
