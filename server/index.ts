@@ -6435,7 +6435,8 @@ bus.subscribe((event: RuntimeEvent) => {
       if (event.itemType === "assistant_text") {
         const shown = event.text.includes("openmaus-goal>") ? visibleCoordinatorText(event.text) : event.text; if (shown) pushAssistantText(shown, event.turnId);
       } else if (event.itemType === "assistant_image") {
-        try {
+        // HSP: screenshots returned by computer/browser tools are working views, not replies; attaching them all flooded chats.
+        if (!event.fromTool) try {
           const decoded = decodeGeneratedImage(event.data);
           const saved = saveImage(decoded.bytes, decoded.mime);
           const key = turnAttachmentKey(event.threadId, event.turnId);
