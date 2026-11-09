@@ -111,7 +111,7 @@ export interface VpsComputerStatus {
   managed: boolean;
   container: "running" | "stopped" | "missing";
   network: "private" | "unsafe" | "unknown";
-  mounts: "none" | "unsafe" | "unknown";
+  mounts: "none" | "home" | "unsafe" | "unknown";
   security: "hardened" | "unsafe" | "unknown";
   desktopReady: boolean;
   desktop_error: string | null;
@@ -338,16 +338,34 @@ function viewerPassword(env: string[] | undefined): string | null {
   return value && /^[A-Za-z0-9_-]{8,128}$/.test(value) ? value : null;
 }
 
-function hasNoHostMounts(detail: {
+/** HSP: the computer's home lives on this named volume, so removing or rebuilding the container keeps sign-ins,
+ * browser profiles and files. `docker rm` without -v leaves it; deleting it is a deliberate manual step. */
+export const VPS_HOME_TARGET = "/home/cua";
+export function vpsHomeVolumeName(containerName: string): string {
+  return `${containerName}-home`;
+}
+export function vpsMountsUsable(mounts: VpsComputerStatus["mounts"]): boolean {
+  return mounts === "none" || mounts === "home";
+}
+
+/** "home" = exactly this computer's own home volume and nothing else; any host folder, other volume or shared mount is unsafe. */
+function mountState(detail: {
   Mounts?: unknown;
   HostConfig?: { Binds?: string[] | null; VolumesFrom?: string[] | null };
-}): boolean {
-  return (
-    Array.isArray(detail.Mounts) &&
-    detail.Mounts.length === 0 &&
-    (!detail.HostConfig?.Binds || detail.HostConfig.Binds.length === 0) &&
-    (!detail.HostConfig?.VolumesFrom || detail.HostConfig.VolumesFrom.length === 0)
-  );
+}, containerName: string): "none" | "home" | "unsafe" {
+  if (detail.HostConfig?.Binds && detail.HostConfig.Binds.length > 0) return "unsafe";
+  if (detail.HostConfig?.VolumesFrom && detail.HostConfig.VolumesFrom.length > 0) return "unsafe";
+  if (!Array.isArray(detail.Mounts)) return "unsafe";
+  if (detail.Mounts.length === 0) return "none";
+  if (detail.Mounts.length !== 1) return "unsafe";
+  const mount = detail.Mounts[0] as { Type?: unknown; Name?: unknown; Destination?: unknown; Driver?: unknown; RW?: unknown };
+  return mount.Type === "volume" &&
+    mount.Name === vpsHomeVolumeName(containerName) &&
+    mount.Destination === VPS_HOME_TARGET &&
+    (mount.Driver === undefined || mount.Driver === "local") &&
+    mount.RW === true
+    ? "home"
+    : "unsafe";
 }
 
 function hasNoPublishedPorts(config: {
@@ -374,7 +392,7 @@ function statusProblem(status: VpsComputerStatus): string | null {
   if (!status.imageMatches) return "The VPS container uses an incompatible or untrusted OpenMausBot image";
   if (!status.managed) return "The VPS container name is occupied by a container OpenMausBot did not create";
   if (status.network === "unsafe") return "The VPS container uses an unapproved network or publishes ports; refusing to use it";
-  if (status.mounts === "unsafe") return "The VPS container has host mounts; refusing to use it";
+  if (status.mounts === "unsafe") return "The VPS container has host mounts or an unexpected volume; refusing to use it";
   if (status.security === "unsafe") return "The VPS container has unsupported privilege, isolation, or automatic-removal settings";
   if (status.container === "stopped") return "The OpenMausBot VPS container is stopped";
   if (status.desktop_error) return `The VPS Cua desktop failed to start: ${status.desktop_error}`;
@@ -467,7 +485,7 @@ async function computeVpsComputerStatus(
     if (status.managed && status.container_id) raisePidsLimit(status.container_id, detail?.HostConfig?.PidsLimit, run);
     if (status.managed && status.container_id) syncVpsLimits(status.container_id, detail?.HostConfig, cfg.vps?.computer, run);
     status.network = hasNoPublishedPorts(detail?.HostConfig, detail?.NetworkSettings?.Networks) ? "private" : "unsafe";
-    status.mounts = hasNoHostMounts(detail ?? {}) ? "none" : "unsafe";
+    status.mounts = mountState(detail ?? {}, status.container_name);
     status.security = vpsSecurityAccepted(detail?.HostConfig, cfg.vps?.computer) ? "hardened" : "unsafe";
 
     const connectionKey = `${alias}:${status.container_name}`;
@@ -486,7 +504,7 @@ async function computeVpsComputerStatus(
       status.imageMatches &&
       status.managed &&
       status.network === "private" &&
-      status.mounts === "none" &&
+      vpsMountsUsable(status.mounts) &&
       status.security === "hardened";
     if (canProbe && containerRef) {
       try {
@@ -770,6 +788,9 @@ export function vpsContainerRunArgs(
     // Without a restart policy Docker leaves the container down after a VPS reboot; unless-stopped still honors Stop.
     "--restart",
     "unless-stopped",
+    // HSP: the home survives removal and rebuilds; Docker creates the volume on first run, seeded from the image.
+    "--mount",
+    `type=volume,source=${vpsHomeVolumeName(containerName)},target=${VPS_HOME_TARGET}`,
     "-e",
     `VNC_PW=${viewerSecret}`,
     imageRef,
@@ -782,7 +803,7 @@ function assertUsableContainer(status: VpsComputerStatus) {
     !status.imageMatches ||
     !status.managed ||
     status.network !== "private" ||
-    status.mounts !== "none" ||
+    !vpsMountsUsable(status.mounts) ||
     status.security !== "hardened"
   ) {
     throw Object.assign(new Error(status.problem ?? "The existing VPS container is unsafe or incompatible"), {

@@ -108,7 +108,7 @@ function fixture({
   container?: boolean;
   running?: boolean;
   managed?: boolean;
-  mounts?: boolean;
+  mounts?: boolean | "home" | "other-volume";
   publicPorts?: boolean;
   publishAllPorts?: boolean;
   deviceRequests?: boolean;
@@ -181,7 +181,7 @@ function fixture({
            Id: containerId,
           Image: state.image ? state.containerImageId : "old-image-id",
           HostConfig: {
-            Binds: mounts ? ["/host:/container"] : [],
+            Binds: mounts === true ? ["/host:/container"] : [],
             VolumesFrom: [],
             NetworkMode: networkMode,
             PortBindings: publicPorts ? { "6901/tcp": [{ HostIp: "0.0.0.0" }] } : {},
@@ -210,7 +210,11 @@ function fixture({
           NetworkSettings: {
             Networks: { [networkMode === "default" ? "bridge" : networkMode]: { IPAddress: "172.17.0.5" } },
           },
-          Mounts: mounts ? [{ Source: "/host", Destination: "/container" }] : [],
+          Mounts: mounts === true
+            ? [{ Source: "/host", Destination: "/container" }]
+            : mounts
+              ? [{ Type: "volume", Name: mounts === "home" ? `${vpsContainerName(BOT_ID)}-home` : "someone-else-home", Destination: "/home/cua", Driver: "local", RW: true }]
+              : [],
           State: { Running: state.running },
         }]),
         stderr: "",
@@ -379,10 +383,20 @@ describe("VPS computer", () => {
     },
   );
 
+  it("accepts the computer's own home volume and nothing else", async () => {
+    const home = await vpsComputerStatus(CONFIG, BOT_ID, fixture({ mounts: "home" }).runner);
+    expect(home.mounts).toBe("home");
+    expect(home.ready).toBe(true);
+  });
+
   it("refuses host mounts, public ports, and unowned containers", async () => {
     const mounted = await vpsComputerStatus(CONFIG, BOT_ID, fixture({ mounts: true }).runner);
     expect(mounted.ready).toBe(false);
     expect(mounted.mounts).toBe("unsafe");
+
+    const otherVolume = await vpsComputerStatus(CONFIG, BOT_ID, fixture({ mounts: "other-volume" }).runner);
+    expect(otherVolume.ready).toBe(false);
+    expect(otherVolume.mounts).toBe("unsafe");
 
     const publicPorts = await vpsComputerStatus(CONFIG, BOT_ID, fixture({ publicPorts: true }).runner);
     expect(publicPorts.ready).toBe(false);
@@ -480,7 +494,8 @@ describe("VPS computer", () => {
     expect(run.join(" ")).toContain("--restart unless-stopped");
     expect(run).toContain("-e");
     expect(run.some((arg) => /^VNC_PW=[A-Za-z0-9_-]{8,}$/.test(arg))).toBe(true);
-    expect(run).not.toContain("--mount");
+    expect(run[run.indexOf("--mount") + 1]).toBe(`type=volume,source=${vpsContainerName(BOT_ID)}-home,target=/home/cua`);
+    expect(run.filter((arg) => arg === "--mount")).toHaveLength(1);
     expect(run).not.toContain("-p");
     const build = provision.calls.find(({ args }) => args[2] === "build");
     expect(build?.args.slice(2)).toEqual(["build", "--force-rm", "-t", VPS_IMAGE, "-"]);

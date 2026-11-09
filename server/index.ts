@@ -6061,7 +6061,7 @@ async function selectableComputers(bot: BotRecord) {
           const status = canWorkOnCloud(cloudEngine(instance)) ? await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), bot.id) : null;
           ready = status?.ready === true;
           canStart = Boolean(status?.daemonUp && status.managed && status.container === "stopped" &&
-            status.image && status.imageMatches && status.network === "private" && status.mounts === "none" && status.security === "hardened");
+            status.image && status.imageMatches && status.network === "private" && vps.vpsMountsUsable(status.mounts) && status.security === "hardened");
           canCreate = Boolean(status?.configured && status.daemonUp && status.container === "missing");
           ownDesktopAwaitsUpdate ||= vpsDesktopOutdated(status);
           reason = status?.problem ? `${status.problem}${vpsDesktopOutdated(status) ? `. ${VPS_OUTDATED_HINT}` : ""}` : reason;
