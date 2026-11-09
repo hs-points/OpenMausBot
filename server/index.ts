@@ -5846,6 +5846,9 @@ async function mountHostComputer(owner: TurnOwner, botId: string, providerSuppor
   return gatedLocalComputer(cua, controlIntegration(botId, owner.threadId, owner.generation, "this computer"), journal);
 }
 
+/** HSP: the VPS computer a turn mounted, so vm_exec can run commands there without a terminal window. */
+const vpsExecTargets = new Map<string, { generation: string; cfg: AppConfig; botId: string; container: string | undefined }>();
+
 /** Checked and started at dispatch, unlike the Boat: the VPS bridge execs into the container as soon as the engine launches and dies if it is not up. */
 async function mountBotVps(
   bot: BotRecord,
@@ -5858,6 +5861,7 @@ async function mountBotVps(
   if (!remote?.ready || !remote.sshAlias) return { problem: remote?.problem ?? null, reachable: remote?.daemonUp === true, outdated: vpsDesktopOutdated(remote) };
   const targetCfg = { ...cfg, vps: { ...botVpsConfig.vps, sshAlias: remote.sshAlias } };
   const vpsMcp = vps.vpsComputerMcp(targetCfg, bot.id, remote.container_id ?? undefined);
+  vpsExecTargets.set(owner.threadId, { generation: owner.generation, cfg: targetCfg, botId: bot.id, container: remote.container_id ?? undefined });
   const vpsControl = controlIntegration(bot.id, owner.threadId, owner.generation);
   // Live frames only once this turn holds the desktop, or it would publish another turn's screen as its own.
   const vpsCapture = () => vps.vpsComputerScreenshot(targetCfg, bot.id);
@@ -13317,7 +13321,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const body = await readInternalBody();
         try {
           const vm = await attachmentVmForTurn(internalCapability);
-          if (!vm) return json(res, 409, { error: "You have no Local VM desktop in this turn, so there is nowhere to run a command." });
+          if (!vm) {
+            const vpsTarget = vpsExecTargets.get(threadId);
+            if (!vpsTarget || vpsTarget.generation !== internalCapability.generation) {
+              return json(res, 409, { error: "You have no Local VM or cloud computer in this turn, so there is nowhere to run a command." });
+            }
+            const gate = await computerCallGate(internalCapability);
+            if (gate.held) return json(res, 409, { error: controlRefusal(gate) });
+            requireActiveInternalCapability();
+            const result = await vps.vpsContainerExec(vpsTarget.cfg, vpsTarget.botId, vpsTarget.container,
+              typeof body.command === "string" ? body.command : "",
+              { timeoutSeconds: typeof body.timeout_seconds === "number" ? body.timeout_seconds : undefined });
+            return json(res, 200, result);
+          }
           const runtime = (await containerRuntimeStatus()).runtime;
           requireActiveInternalCapability();
           if (!runtime || !internalCapabilityIsActive({ ...internalCapability, localVmTarget: vm }) ||
