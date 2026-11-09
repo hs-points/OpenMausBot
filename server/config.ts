@@ -487,7 +487,7 @@ export interface AppConfig extends HelperConfig {
   /** Boat token (ascii.dev renamed Box to Boat); config key "box", env BOX_TOKEN. */
   box?: { token?: string };
   /** A named host from the user's SSH config. Authentication stays with SSH. */
-  vps?: { sshAlias?: string };
+  vps?: { sshAlias?: string; /** Per bot, set by vpsConfigForBot only; never read from config.json. */ computer?: import("../shared/vps-computer-settings.ts").VpsComputerSettings };
   opencodeGo?: { apiKey?: string; providerKeys?: Record<string, string> };
   tts?: { key?: string; fishKey?: string; geminiKey?: string; voice?: string; provider?: "elevenlabs" | "fish" | "system" | "chatterbox" | "xai" | "gemini" | "openai"; baseUrl?: string; model?: string; fishModel?: FishTtsModel; everyReply?: boolean };
   decider?: DeciderConfig;

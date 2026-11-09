@@ -141,10 +141,14 @@ export { syncedFolders } from "./cloud-sync-store.ts";
 export const CLOUD_ENGINES_HERE = " The AIs bots run on (Claude, Codex, Cursor and the rest) run here, on My Cloud, not on their computer or their cloud computer."
   + " If one needs installing or signing in, tell them to choose it in the model picker: its card does that here, with a sign-in link they open on any device."
   + " Never tell them to run an AI's install or sign-in command on their own computer, and never run one on their cloud computer yourself: neither signs in the AIs here.";
+/** A coding cloud computer (bot.vpsComputer.codingTools): AI CLIs there are the person's own tools, not the AIs bots run on. */
+export const CLOUD_ENGINES_HERE_CODING = " The AIs bots run on (Claude, Codex, Cursor and the rest) run here, on My Cloud, not on their computer or their cloud computer."
+  + " If one needs installing or signing in for you, tell them to choose it in the model picker: its card does that here, with a sign-in link they open on any device."
+  + " Their cloud computer is a coding machine: installing, updating and signing in AI command-line tools there (Claude Code, Codex, gh and the like) is allowed when they ask, and they run on that computer only; they never sign in the AIs here.";
 
 /** `asks`: the person's own Cloud, whose bots ask them to turn on what their computer doesn't give now (ask_for_computer). */
 export function cloudHomePrompt(sharedComputerTools: boolean, synced: ReadonlyArray<{ computerName: string; pcPath: string; cloudPath: string }> = [],
-  lent: ReadonlyArray<{ name: string; platform: "darwin" | "win32" | "linux" | null }> = [], asks = false): string {
+  lent: ReadonlyArray<{ name: string; platform: "darwin" | "win32" | "linux" | null }> = [], asks = false, codingComputer = false): string {
   const { theirs, device } = theirComputer(lent);
   const unavailable = asks
     ? ` If it isn't online, or doesn't lend what you need (its apps and screen, its files, running commands), call ask_for_computer with what you want to do and why: it shows them one card with a one-tap Turn on, and you carry on once it's on. Don't explain the fix yourself, and never do it on their cloud computer or in the built-in browser instead unless they ask you to.`
@@ -155,7 +159,7 @@ export function cloudHomePrompt(sharedComputerTools: boolean, synced: ReadonlyAr
     : ` You cannot see or use ${theirs}, its screen or its files from here. If they ask for something on it, say so in one sentence.`)
     + (asks ? " For work that doesn't need their own computer, use what works here:" : " Offer what works here:")
     + " the built-in browser and their cloud computer, a desktop in the cloud. Call it their cloud computer, as the app does. Never ask them to set up this computer or a Local VM; neither exists here."
-    + CLOUD_ENGINES_HERE
+    + (codingComputer ? CLOUD_ENGINES_HERE_CODING : CLOUD_ENGINES_HERE)
     + syncedFoldersPrompt(synced);
 }
 
