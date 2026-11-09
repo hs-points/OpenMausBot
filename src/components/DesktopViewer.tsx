@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, Clipboard, Keyboard, Maximize, Minimize, Mon
 import { cn } from "@/lib/cn";
 import type RFB from "@novnc/novnc";
 import { connectDesktop, DesktopUnreachable, typeOnDesktop } from "@/lib/desktop-connection";
+import { attachDesktopPaste } from "@/lib/desktop-paste";
 import { t } from "@/lib/i18n";
 import { useHeldMenuMotion, useMenuMotion } from "./MenuMotion";
 
@@ -74,6 +75,12 @@ export function DesktopViewer() {
       document.title = oldTitle;
     };
   }, [target, threadId, attempt]);
+
+  // Cmd/Ctrl+V on the screen pastes this computer's clipboard; when the browser will not share it, the clipboard panel opens.
+  useEffect(() => attachDesktopPaste(screen.current!, () => rfb.current, () => {
+    setPanel("clipboard");
+    requestAnimationFrame(() => document.getElementById("clipboard-text")?.focus());
+  }), []);
 
   useEffect(() => {
     if (rfb.current) {

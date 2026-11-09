@@ -19,8 +19,10 @@ import {
   IMAGE_LAYER_VERSION,
   MANAGED_LABEL,
 } from "./container-computer.ts";
-import { desktopCapArgs, dockerSecurityIsHardened, type DockerHardeningConfig } from "./container-isolation.ts";
+import { type DockerHardeningConfig } from "./container-isolation.ts";
 import { PIDS_LIMIT, raisePidsLimit } from "./container-limits.ts";
+import { syncVpsLimits, vpsCapabilityArgs, vpsResourceArgs, vpsSecurityAccepted } from "./vps-container-settings.ts";
+import type { VpsComputerSettings } from "../shared/vps-computer-settings.ts";
 import { DATA_DIR, isValidSshAlias, vpsSshAlias, type AppConfig } from "./config.ts";
 import { augmentedPath } from "./env-path.ts";
 import { COMMAND_TIMEOUT_KILL_GRACE_MS, defaultRunner, type VpsCommandRunner } from "./vps-command.ts";
@@ -65,7 +67,7 @@ const lifecycleLocks = new Map<string, Promise<void>>();
 /** The app config reloads in place: across awaits it could inspect one host and mutate another. */
 function snapshotVpsConfig(cfg: AppConfig): AppConfig {
   const sshAlias = vpsSshAlias(cfg);
-  return sshAlias ? { vps: { sshAlias } } : {};
+  return sshAlias ? { vps: { sshAlias, ...(cfg.vps?.computer ? { computer: { ...cfg.vps.computer } } : {}) } } : {};
 }
 
 export function vpsLifecycleBusy(): boolean {
@@ -427,6 +429,7 @@ async function computeVpsComputerStatus(
     const inspected = JSON.parse((await inspect(["inspect", status.container_name])).stdout) as Array<{
       Config?: { Image?: string; Labels?: Record<string, string>; Env?: string[] };
       HostConfig?: DockerHardeningConfig & {
+        Memory?: number | null; MemorySwap?: number | null; NanoCpus?: number | null;
         Binds?: string[] | null;
         VolumesFrom?: string[] | null;
         NetworkMode?: string;
@@ -459,11 +462,10 @@ async function computeVpsComputerStatus(
       labels?.[VPS_CONTAINER_LABEL] === status.container_name &&
       (environmentLabel === undefined || environmentLabel === vpsEnvironmentId());
     if (status.managed && status.container_id) raisePidsLimit(status.container_id, detail?.HostConfig?.PidsLimit, run);
+    if (status.managed && status.container_id) syncVpsLimits(status.container_id, detail?.HostConfig, cfg.vps?.computer, run);
     status.network = hasNoPublishedPorts(detail?.HostConfig, detail?.NetworkSettings?.Networks) ? "private" : "unsafe";
     status.mounts = hasNoHostMounts(detail ?? {}) ? "none" : "unsafe";
-    status.security = dockerSecurityIsHardened(detail?.HostConfig, { restartPolicy: "any" })
-      ? "hardened"
-      : "unsafe";
+    status.security = vpsSecurityAccepted(detail?.HostConfig, cfg.vps?.computer) ? "hardened" : "unsafe";
 
     const connectionKey = `${alias}:${status.container_name}`;
     const privateIp = Object.values(detail?.NetworkSettings?.Networks ?? {})[0]?.IPAddress;
@@ -722,6 +724,7 @@ export function vpsContainerRunArgs(
   containerName: string,
   imageRef = VPS_IMAGE,
   viewerSecret = randomBytes(18).toString("base64url"),
+  settings?: VpsComputerSettings,
 ): string[] {
   if (!CONTAINER_NAME.test(containerName) || (imageRef !== VPS_IMAGE && !IMAGE_ID.test(imageRef))) {
     throw new Error("invalid managed VPS container or image reference");
@@ -748,12 +751,7 @@ export function vpsContainerRunArgs(
     `${BASE_IMAGE_LABEL}=${BASE_IMAGE_DIGEST}`,
     "--label",
     `${IMAGE_LAYER_LABEL}=${IMAGE_LAYER_VERSION}`,
-    "--memory",
-    "4g",
-    "--memory-swap",
-    "4g",
-    "--cpus",
-    "2",
+    ...vpsResourceArgs(settings),
     "--pids-limit", String(PIDS_LIMIT),
     "--network",
     "bridge",
@@ -761,8 +759,9 @@ export function vpsContainerRunArgs(
     "private",
     "--cgroupns",
     "private",
-    // No host mounts, so root in this desktop can install packages without reaching the host's files.
-    ...desktopCapArgs("docker"),
+    // No host mounts, so root in this desktop can install packages without reaching the host's files (HSP: a
+    // root-capable PC keeps Docker's default set instead; see vpsCapabilityArgs).
+    ...vpsCapabilityArgs(settings),
     "--shm-size",
     "512m",
     // Without a restart policy Docker leaves the container down after a VPS reboot; unless-stopped still honors Stop.
@@ -986,7 +985,7 @@ export async function vpsComputerAction(
             imageRef = (await computeVpsComputerStatus(cfg, botId, runner)).image_id;
           }
           if (!imageRef) throw Object.assign(new Error("The prepared VPS image could not be identified"), { status: 409 });
-          await run(vpsContainerRunArgs(before.container_name, imageRef));
+          await run(vpsContainerRunArgs(before.container_name, imageRef, undefined, cfg.vps?.computer));
         } else {
           assertUsableContainer(before);
           if (before.container === "stopped") await run(["start", containerRef]);

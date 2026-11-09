@@ -22,7 +22,7 @@ import type { WireTool } from "./wire-tool.ts";
 import type { ModelRequestCardData } from "./model-request.ts";
 import type { ConnectorCardData } from "./connector-card.ts"; import type { McpChangeRequest } from "./mcp-request.ts";
 import type { SkillRequestCardData } from "./skill-request.ts"; import type { OutsideWriteCardField } from "./outside-write.ts";
-import type { QuestionRequestCardData } from "./ask-question.ts";
+import type { QuestionRequestCardData } from "./ask-question.ts"; import type { VpsComputerSettings } from "./vps-computer-settings.ts";
 import type { AutomationLine, RoutineRunCardData } from "./routine-run.ts";
 import type { WidgetPayload } from "./widget.ts";
 import type { AppFromRef, AppPayload, AppPointedRef } from "./app.ts";
@@ -330,6 +330,8 @@ export interface WireBot extends DefaultBotFields, BotAccessFields {
   /** This bot's own SSH config alias for its managed VPS computer; absent
    * means the default server from Settings → API keys. */
   vpsAlias?: string;
+  /** This bot's own cloud computer settings (root-capable, CPU/RAM, coding tools); Admin-only. */
+  vpsComputer?: VpsComputerSettings;
   /** where its tasks run their tools; absent = each task's own folder. Its .claude/settings.json (else the bot folder's) applies in all. */
   cwd?: string;
   /** Auto mode: the bot approves its own tool permissions. */

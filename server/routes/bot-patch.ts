@@ -36,6 +36,7 @@ import { refusalBody, userError } from "../user-errors.ts";
 import { pinnedClientThreadGuard } from "./pinned-client-thread.ts";
 import type { ModelSelectionCheck } from "./bots-create.ts";
 import { PASS, type RouteHandler } from "./table.ts";
+import { parseVpsComputerSettings } from "../../shared/vps-computer-settings.ts";
 
 export interface BotPatchRouteDeps {
   store: Store;
@@ -403,6 +404,12 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
             error: "vpsAlias must be a simple SSH config alias (letters, numbers, dot, dash, or underscore), or null to use the default server",
           });
         }
+      }
+      if (body.vpsComputer !== undefined) {
+        // Root-capable and its CPU/RAM shape the next container this bot gets; a running one moves to the saved limits.
+        const parsed = parseVpsComputerSettings(body.vpsComputer);
+        if (!parsed.ok) return json(res, 400, { error: parsed.error });
+        patch.vpsComputer = parsed.settings;
       }
       if (body.chiefOfStaff !== undefined && typeof body.chiefOfStaff !== "boolean") {
         return json(res, 400, { error: "chiefOfStaff must be true or false" });
