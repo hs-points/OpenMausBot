@@ -53,6 +53,7 @@ import {
   vpsSshTunnelArgs,
   vpsStartsForTurn,
   vpsUnavailableHint,
+  vpsWriteSecretFile,
   inspectVpsForAuto,
   reuseVps,
   dockerCliInstallCommand,
@@ -303,6 +304,30 @@ describe("VPS computer", () => {
       expect(() => vpsDockerArgs(alias, ["info"])).toThrow(/alias/);
     }
     expect(() => vpsContainerMcpArgs("production-vps", "not a container")).toThrow(/connection/);
+  });
+
+  it("writes a file secret into the VPS container over stdin, never in argv", async () => {
+    const calls: Array<{ args: string[]; input?: string }> = [];
+    const runner = async (args: string[], options?: { input?: string }) => { calls.push({ args, input: options?.input }); return { stdout: "", stderr: "" }; };
+    const path = await vpsWriteSecretFile("production-vps", "openmausbot-vps-bot-0123456789ab", "thread-1", "card-1", "482913", runner);
+    expect(path).toBe("/home/cua/workspace/.openmausbot-secrets/thread-1/card-1");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.args.slice(0, 3)).toEqual(["-H", "ssh://production-vps", "exec"]);
+    expect(calls[0]!.input).toBe("482913");
+    expect(JSON.stringify(calls[0]!.args)).not.toContain("482913");
+    const script = calls[0]!.args.at(-1)!;
+    expect(script).toContain("umask 077");
+    expect(script).toContain("chmod 600");
+  });
+
+  it("refuses unsafe secret targets and hides a failed write's detail", async () => {
+    const runner = async () => ({ stdout: "", stderr: "" });
+    await expect(vpsWriteSecretFile("prod;vps", "openmausbot-vps-bot-0123456789ab", "t", "c", "x", runner)).rejects.toThrow(/target/);
+    await expect(vpsWriteSecretFile("production-vps", "bad container", "t", "c", "x", runner)).rejects.toThrow(/target/);
+    await expect(vpsWriteSecretFile("production-vps", "openmausbot-vps-bot-0123456789ab", "../x", "c", "x", runner)).rejects.toThrow(/invalid/);
+    const failing = async () => { throw new Error("ssh: 482913 leaked"); };
+    await expect(vpsWriteSecretFile("production-vps", "openmausbot-vps-bot-0123456789ab", "t", "c", "482913", failing))
+      .rejects.toThrow("the VPS computer could not take the secret file");
   });
 
   it("keeps the live desktop behind a validated loopback SSH forward", () => {
