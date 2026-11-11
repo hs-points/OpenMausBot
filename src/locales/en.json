@@ -5486,6 +5486,8 @@
   "computer.takeControl": "Take control",
   "computer.youHaveWheel": "You have the wheel. The bot's clicks and keystrokes are refused until you hand it back.",
   "computer.inControl": "You're in control",
+  "computer.pill.done": "I'm done",
+  "computer.pill.botWorking": "Bot is working",
   "computer.useOpenDesktop": "Use “Open live desktop” to drive.",
   "computer.simple.useFullScreen": "Use “Full screen” to drive.",
   "computer.handBack": "Hand control back",

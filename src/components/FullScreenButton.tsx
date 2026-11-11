@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Hand, Loader2, Maximize2, Minimize2 } from "lucide-react";
+import { Loader2, Maximize2, Minimize2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { useModalDialog } from "@/hooks/use-modal-dialog";
+import { DesktopPill, FRAME, STAGE, exitIcon } from "./DesktopPill";
 import { useCaptionChrome, useDesktopCapabilities } from "./DesktopCapabilities";
 
 /**
@@ -89,44 +90,29 @@ function WatchFullScreen({ frame, name, takeDisabled, error, onClose, onTakeCont
     if (takeDisabled && (active === takeRef.current || active === document.body)) dialogRef.current?.focus();
   }, [takeDisabled]);
 
-  const iconButton = "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50";
   const label = t("computer.screenOf", { name });
   return (
-    <div ref={dialogRef} tabIndex={-1} data-watch-full-screen role="dialog" aria-modal="true" aria-label={label} className="fixed inset-0 z-[65] flex flex-col bg-app outline-none">
-      <header {...dragProps} className={cn("flex shrink-0 flex-wrap items-center gap-2 border-b border-hairline/40 bg-panel px-3 py-2", macInset && "pl-[86px]")}>
-        <span className="min-w-0 truncate text-[13px] font-medium text-ink">{label}</span>
-        <span className="pointer-events-none rounded-full bg-black/70 px-2.5 py-1 text-[11px] font-medium text-white shadow-sm">
-          {t("computer.watchingBotWorks")}
-        </span>
-        <button ref={exitRef} type="button" style={noDragStyle} onClick={onClose} aria-label={t("desktopViewer.exitFullscreen")} className={cn(iconButton, "ml-auto bg-control text-ink hover:bg-raised-hover")}>
-          <Minimize2 size={14} aria-hidden="true" />
-          <span className="max-sm:hidden">{t("desktopViewer.exitFullscreen")}</span>
-        </button>
-        <button
-          ref={takeRef}
-          type="button"
-          style={noDragStyle}
-          onClick={() => { setTried(true); onTakeControl(); }}
-          disabled={takeDisabled}
-          className={cn(iconButton, "bg-accent font-medium text-accent-ink hover:brightness-110")}
-          title={t("computer.takeControlTitle")}
-        >
-          <Hand size={14} aria-hidden="true" />
-          {t("computer.takeControl")}
+    <div ref={dialogRef} tabIndex={-1} data-watch-full-screen role="dialog" aria-modal="true" aria-label={label} className={FRAME}>
+      <header {...dragProps} className={cn("absolute inset-x-0 top-0 z-10 h-12", macInset && "pl-[86px]")}>
+        <button ref={exitRef} type="button" style={noDragStyle} onClick={onClose} title={t("desktopViewer.exitFullscreen")} aria-label={t("desktopViewer.exitFullscreen")} className={exitIcon}>
+          <Minimize2 size={16} aria-hidden="true" />
         </button>
       </header>
-      {tried && error && (
-        <div role="alert" className="shrink-0 border-b border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">{error}</div>
-      )}
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-inset">
+      <div className={STAGE}>
         {frame ? (
-          <img src={frame} alt={label} className="h-full w-full object-contain" />
+          <img src={frame} alt={label} className="max-h-full max-w-full rounded-2xl object-contain" />
         ) : (
-          <span role="status" className="flex items-center gap-2 text-[12px] text-ink-secondary">
+          <span role="status" className="flex items-center gap-2 text-[12px] text-neutral-400">
             <Loader2 size={16} className="animate-spin" aria-hidden="true" />
             {t("computer.waitingFrame")}
           </span>
         )}
+      </div>
+      {tried && error && (
+        <div role="alert" className="mx-auto mb-2 max-w-md shrink-0 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-center text-[12px] text-danger">{error}</div>
+      )}
+      <div className="flex shrink-0 justify-center px-3 pb-5 pt-1">
+        <DesktopPill control={false} disabled={takeDisabled} noDragStyle={noDragStyle} onAction={() => { setTried(true); onTakeControl(); }} buttonRef={takeRef} />
       </div>
     </div>
   );

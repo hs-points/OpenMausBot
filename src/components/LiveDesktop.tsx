@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Hand, Loader2, Minimize2, RefreshCw, Send } from "lucide-react";
+import { Keyboard, Loader2, Minimize2, RefreshCw, Send } from "lucide-react";
 import type RFB from "@novnc/novnc";
 import { cn } from "@/lib/cn";
 import { connectDesktop, typeOnDesktop } from "@/lib/desktop-connection";
 import { t } from "@/lib/i18n";
 import { useCaptionChrome, useDesktopCapabilities } from "./DesktopCapabilities";
+import { DesktopPill, FRAME } from "./DesktopPill";
 import { TeachOnComputer, type TeachSession } from "./TeachOnComputer";
 
 type Connection = "connecting" | "connected" | "disconnected";
@@ -60,6 +61,7 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
     }).then((connected) => {
       if (controller.signal.aborted) return connected.disconnect();
       client = connected;
+      connected.background = "transparent";
       rfb.current = connected;
     }, () => { if (!controller.signal.aborted) lost(); });
     return () => {
@@ -75,12 +77,7 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
   }, [expanded, connection]);
 
   const label = t("computer.viewerTitle", { name });
-  const pill = (
-    <span className="pointer-events-none flex items-center gap-1.5 rounded-full bg-black/70 px-2.5 py-1 text-[11px] font-medium text-white shadow-sm">
-      <span className="size-1.5 rounded-full bg-success" aria-hidden="true" />
-      {t("computer.inControl")}
-    </span>
-  );
+  const [typing, setTyping] = useState(false);
   const iconButton = "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50";
 
   return (
@@ -88,56 +85,56 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
       data-live-desktop
       data-state={connection}
       data-expanded={expanded ? "true" : undefined}
-      className={cn(expanded ? "fixed inset-0 z-[65] flex flex-col bg-app" : "relative h-full w-full")}
+      className={cn(expanded ? FRAME : "relative h-full w-full")}
       onKeyDown={(event) => {
         if (expanded && event.key === "Escape" && !(event.target instanceof HTMLCanvasElement)) onExpandedChange(false);
       }}
     >
       {expanded && (
-        <header {...dragProps} className={cn("flex shrink-0 flex-wrap items-center gap-2 border-b border-hairline/40 bg-panel px-3 py-2", macInset && "pl-[86px]")}>
-          <span className="min-w-0 truncate text-[13px] font-medium text-ink">{label}</span>
-          {pill}
-          <form
-            style={noDragStyle}
-            className="ml-auto flex min-w-0 items-center gap-1"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!rfb.current || connection !== "connected" || !text) return;
-              typeOnDesktop(rfb.current, text);
-              typedSink.current?.(text);
-              setText("");
-            }}
-          >
-            <input
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              maxLength={4096}
-              autoComplete="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              placeholder={t("desktopViewer.text")}
-              aria-label={t("desktopViewer.text")}
-              className="w-44 min-w-0 rounded-lg border border-hairline bg-inset px-2.5 py-1.5 text-[12px] text-ink outline-none focus:border-focus max-sm:w-28"
-            />
-            <button type="submit" disabled={connection !== "connected" || !text} title={t("desktopViewer.send")} aria-label={t("desktopViewer.send")} className={cn(iconButton, "bg-control text-ink hover:bg-raised-hover")}>
-              <Send size={14} aria-hidden="true" />
+        <header {...dragProps} className={cn("absolute inset-x-0 top-0 z-10 h-12", macInset && "pl-[86px]")}>
+          <div style={noDragStyle} className="absolute right-3 top-3 flex items-center gap-1">
+            {typing && (
+              <form
+                className="flex min-w-0 items-center gap-1"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!rfb.current || connection !== "connected" || !text) return;
+                  typeOnDesktop(rfb.current, text);
+                  typedSink.current?.(text);
+                  setText("");
+                }}
+              >
+                <input
+                  value={text}
+                  onChange={(event) => setText(event.target.value)}
+                  maxLength={4096}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  autoFocus
+                  placeholder={t("desktopViewer.text")}
+                  aria-label={t("desktopViewer.text")}
+                  className="w-44 min-w-0 rounded-lg border border-white/15 bg-white/10 px-2.5 py-1.5 text-[12px] text-white outline-none placeholder:text-neutral-400 focus:border-focus max-sm:w-28"
+                />
+                <button type="submit" disabled={connection !== "connected" || !text} title={t("desktopViewer.send")} aria-label={t("desktopViewer.send")} className={cn(iconButton, "bg-white/10 text-white hover:bg-white/20")}>
+                  <Send size={14} aria-hidden="true" />
+                </button>
+              </form>
+            )}
+            <button type="button" onClick={() => setTyping((value) => !value)} title={t("desktopViewer.text")} aria-label={t("desktopViewer.text")} aria-pressed={typing} className="flex size-8 items-center justify-center rounded-md text-neutral-300 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-focus">
+              <Keyboard size={16} aria-hidden="true" />
             </button>
-          </form>
-          <button type="button" style={noDragStyle} onClick={() => onExpandedChange(false)} className={cn(iconButton, "bg-control text-ink hover:bg-raised-hover")}>
-            <Minimize2 size={14} aria-hidden="true" />
-            <span className="max-sm:hidden">{t("desktopViewer.exitFullscreen")}</span>
-          </button>
-          <button type="button" style={noDragStyle} onClick={onHandBack} disabled={handingBack} className={cn(iconButton, "bg-accent font-medium text-accent-ink hover:brightness-110")}>
-            {handingBack ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Hand size={14} aria-hidden="true" />}
-            {t("computer.handBack")}
-          </button>
+            <button type="button" onClick={() => onExpandedChange(false)} title={t("desktopViewer.exitFullscreen")} aria-label={t("desktopViewer.exitFullscreen")} className="flex size-8 items-center justify-center rounded-md text-neutral-300 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-focus">
+              <Minimize2 size={16} aria-hidden="true" />
+            </button>
+          </div>
         </header>
       )}
-      <div className={cn("relative overflow-hidden bg-inset", expanded ? "min-h-0 flex-1" : "h-full w-full")}>
+      <div className={cn("relative overflow-hidden", expanded ? "mx-auto min-h-0 w-full flex-1 bg-transparent px-3 pb-2 pt-12 sm:px-12 [&_canvas]:rounded-2xl" : "h-full w-full bg-inset")}>
         {poster && connection !== "connected" && (
           <img src={poster} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full object-contain opacity-50" />
         )}
-        <div ref={screen} role="application" aria-label={label} className="absolute inset-0" />
+        <div ref={screen} role="application" aria-label={label} className={cn("absolute", expanded ? "inset-x-3 bottom-2 top-12 sm:inset-x-12" : "inset-0")} />
         {connection === "connecting" && (
           <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-[12px] text-ink-secondary">
             <Loader2 size={16} className="animate-spin" aria-hidden="true" />
@@ -155,6 +152,11 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
           </div>
         )}
       </div>
+      {expanded && (
+        <div className="flex shrink-0 justify-center px-3 pb-5 pt-2">
+          <DesktopPill control onAction={onHandBack} busy={handingBack} noDragStyle={noDragStyle} />
+        </div>
+      )}
     </div>
   );
 }
