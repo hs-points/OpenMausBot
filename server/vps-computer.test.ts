@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { createServer, type Server } from "node:net";
+import { vpsWriteSecretFile } from "./vps-secret-file.ts";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 vi.mock("node:child_process", async () => ({
@@ -53,7 +54,6 @@ import {
   vpsSshTunnelArgs,
   vpsStartsForTurn,
   vpsUnavailableHint,
-  vpsWriteSecretFile,
   inspectVpsForAuto,
   reuseVps,
   dockerCliInstallCommand,
