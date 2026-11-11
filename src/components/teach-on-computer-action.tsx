@@ -79,5 +79,7 @@ export function useTeachOnComputer({ bot, takeover, live, computer, busy, setPen
     </button>
   ) : null;
 
-  return { session, button };
+  /** Starts recording from the live desktop's own frame; null while recording or when teaching is unavailable. */
+  const startFromDesktop = ready && skillAuthoringEnabled(state.config) && !teaching ? () => void start() : null;
+  return { session, button, startFromDesktop };
 }

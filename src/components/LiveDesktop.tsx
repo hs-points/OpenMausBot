@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Keyboard, Loader2, Minimize2, RefreshCw, Send } from "lucide-react";
+import { GraduationCap, Keyboard, Loader2, Minimize2, RefreshCw, Send } from "lucide-react";
 import type RFB from "@novnc/novnc";
 import { cn } from "@/lib/cn";
 import { connectDesktop, typeOnDesktop } from "@/lib/desktop-connection";
@@ -11,7 +11,7 @@ import { TeachOnComputer, type TeachSession } from "./TeachOnComputer";
 type Connection = "connecting" | "connected" | "disconnected";
 
 /** The computer the person took control of, live and drivable where they were watching it. */
-export function LiveDesktop({ target, threadId, name, poster, expanded, onExpandedChange, onHandBack, handingBack, onUnreachable, teach }: {
+export function LiveDesktop({ target, threadId, name, poster, expanded, onExpandedChange, onHandBack, handingBack, onUnreachable, teach, onStartTeach }: {
   target: string;
   threadId: string;
   name: string;
@@ -25,6 +25,8 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
   onUnreachable: () => void;
   /** Teach on computer: record the person's own steps for the bot to learn. */
   teach?: TeachSession;
+  /** Starts teaching from the full-screen frame; absent while recording or when teaching is unavailable. */
+  onStartTeach?: () => void;
 }) {
   const screen = useRef<HTMLDivElement>(null);
   const rfb = useRef<RFB | null>(null);
@@ -120,6 +122,12 @@ export function LiveDesktop({ target, threadId, name, poster, expanded, onExpand
                   <Send size={14} aria-hidden="true" />
                 </button>
               </form>
+            )}
+            {onStartTeach && !teach && (
+              <button type="button" onClick={onStartTeach} disabled={connection !== "connected"} title={t("teach.actionTitle", { name })} aria-label={t("teach.action")} data-testid="teach-on-computer-frame" className="flex h-8 items-center gap-1.5 rounded-md px-2 text-[12px] text-neutral-300 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50">
+                <GraduationCap size={16} aria-hidden="true" />
+                <span className="max-sm:hidden">{t("teach.action")}</span>
+              </button>
             )}
             <button type="button" onClick={() => setTyping((value) => !value)} title={t("desktopViewer.text")} aria-label={t("desktopViewer.text")} aria-pressed={typing} className="flex size-8 items-center justify-center rounded-md text-neutral-300 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-focus">
               <Keyboard size={16} aria-hidden="true" />

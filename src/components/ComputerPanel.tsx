@@ -1312,7 +1312,7 @@ export function ComputerPanel({
               <LiveDesktop
                 target={liveTarget} threadId={bot.threadId} name={bot.name} poster={frameSrc}
                 expanded={takeover.expanded} onExpandedChange={takeover.setExpanded}
-                onHandBack={() => void handBack()} handingBack={takeover.handingBack} teach={teach.session}
+                onHandBack={() => void handBack()} handingBack={takeover.handingBack} teach={teach.session} onStartTeach={teach.startFromDesktop ?? undefined}
                 onUnreachable={() => { takeover.leave(); setError(new LocalizedPanelError("computer.err.openDesktop")); }}
               />
             </Suspense>
