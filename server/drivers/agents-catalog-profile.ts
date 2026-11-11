@@ -32,6 +32,8 @@ export interface CatalogProfile {
   imageGeneration?: boolean;
   /** A cloud computer can be had here (Boat): the meeting tools are mounted. */
   meetings?: boolean;
+  /** This bot holds a Paperclip key: paperclip_ticket is mounted. Absent means off. */
+  paperclip?: boolean;
 }
 
 /** Everything is off unless the harness says "1". */
@@ -53,5 +55,6 @@ export function catalogProfileFromEnv(env: NodeJS.ProcessEnv): CatalogProfile {
     room: env.OMB_ROOM === "1",
     imageGeneration: env.OMB_IMAGE_GENERATION === "1",
     meetings: env.OMB_MEETINGS === "1",
+    paperclip: env.OMB_PAPERCLIP === "1",
   };
 }

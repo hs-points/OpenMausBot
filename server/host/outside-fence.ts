@@ -69,6 +69,8 @@ const EXACT: ReadonlySet<string> = new Set([
   "POST /api/internal/connectors/request",
   "POST /api/internal/data/mcp",
   "POST /api/internal/email/mcp",
+  // Comment, set status, list, get on a Paperclip ticket; the key is the bot's own, held here, and the route is absent for a bot with none.
+  "POST /api/internal/paperclip-ticket",
 ]);
 const ASKED_MCP_PREFIX = "/api/internal/mcp-http/";
 
