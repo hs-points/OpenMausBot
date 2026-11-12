@@ -1,6 +1,6 @@
 // HSP: vm_exec on a self-hosted VPS computer runs inside the bot's own container and reports its exit code.
 import { describe, expect, it } from "vitest";
-import { vpsContainerExec } from "./vps-computer.ts";
+import { vpsContainerExec } from "./vps-container-exec.ts";
 import type { AppConfig } from "./config.ts";
 
 const cfg = { vps: { sshAlias: "kvm8-cpc" } } as unknown as AppConfig;

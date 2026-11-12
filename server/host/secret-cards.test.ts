@@ -283,16 +283,16 @@ describe("Use a saved one on a secret card", () => {
 describe("a file secret for a remote VPS computer", () => {
   const CODE = "482913";
   const vpsVm = "vps:hsp-vps:openmausbot-vps-bot-0123456789ab";
-  const asked = (extra: Record<string, unknown>, vm: string | undefined) => {
+  const asked = async (extra: Record<string, unknown>, vm: string | undefined) => {
     const made = fixture(undefined, undefined, {}, { turnVm: () => vm, phoneSecretSubmissions: { has: () => false }, ...extra });
-    made.cards.requestCredential(made.bot, "ledger-main", { label: "WeCom code", reason: "WeCom emailed a sign-in code.", delivery: "file" });
+    await made.cards.requestCredential(made.bot, "ledger-main", { label: "WeCom code", reason: "WeCom emailed a sign-in code.", delivery: "file" });
     return made;
   };
 
   it("records the VPS computer on the card and writes the value there, not on this host", async () => {
     const writeRemoteFile = vi.fn(async (_alias: string, _container: string, threadId: string, messageId: string) =>
       `/home/cua/workspace/.openmausbot-secrets/${threadId}/${messageId}`);
-    const { cards, lines, bot, dataDir } = asked({ writeRemoteFile }, vpsVm);
+    const { cards, lines, bot, dataDir } = await asked({ writeRemoteFile }, vpsVm);
     expect(lines[0]!.secret!.vm).toBe(vpsVm);
     const saved = await cards.saveCustomSecret(bot.id, "ledger-main", lines[0]!.id, CODE);
     expect(saved.status).not.toBe(500);
@@ -304,10 +304,10 @@ describe("a file secret for a remote VPS computer", () => {
 
   it("tells the bot the path on the computer and fails closed when it cannot be written", async () => {
     const path = "/home/cua/workspace/.openmausbot-secrets/ledger-main/m1";
-    const ok = asked({ writeRemoteFile: async () => path }, vpsVm);
+    const ok = await asked({ writeRemoteFile: async () => path }, vpsVm);
     await ok.cards.saveCustomSecret(ok.bot.id, "ledger-main", ok.lines[0]!.id, CODE);
     expect(savedSecretText("WeCom code", { file: path })).toContain(`cat '${path}'`);
-    const failing = asked({ writeRemoteFile: async () => { throw new Error("the VPS computer could not take the secret file"); } }, vpsVm);
+    const failing = await asked({ writeRemoteFile: async () => { throw new Error("the VPS computer could not take the secret file"); } }, vpsVm);
     const result = await failing.cards.saveCustomSecret(failing.bot.id, "ledger-main", failing.lines[0]!.id, CODE);
     expect(result.status).toBe(500);
     expect(JSON.stringify(result.body)).not.toContain(CODE);

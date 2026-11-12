@@ -582,10 +582,10 @@ import { PhoneSecretBridge, PhoneSecretSubmissionRegistry } from "./phone-secret
 // Keep these two last, so loading the route table leaves module start-up order as is.
 import { gzipTunnelReplies, json, onJsonBody, parsedBodyOf, readBody } from "./harness/http.ts";
 import { holdBodyDeadline } from "./body-deadline.ts";
-import { createNoAiNotice } from "./host/no-ai-notice.ts"; import { PASS, ROUTES, dispatchRoutes } from "./routes/table.ts"; import { createSecretCards, vpsTurnVm } from "./host/secret-cards.ts"; import { vpsThreadComputers, vpsWriteSecretFile } from "./vps-secret-file.ts"; import { createInternalCredentialRequestRoutes, createSecretCardRoutes } from "./routes/secret-cards.ts"; import { applyIncludedPagesMessage } from "./pages/access.ts"; import { createPublishedPages } from "./pages/service.ts"; import { createInternalToolRoutes } from "./routes/internal-tools.ts"; import { createHelperSuggestionRoutes } from "./routes/helper-suggestion.ts"; import { createXConnectorRoutes } from "./routes/x-connector.ts"; import { createMoveFreeze, switchAutomationsOff } from "./move-freeze.ts"; import { createMoveFreezeRoutes } from "./routes/move-freeze.ts"; import { createMoveWaits } from "./move-waits.ts"; import { assertBotHere, createBotMoves } from "./bot-moves.ts"; import { createBotMoveRoutes } from "./routes/bot-moves.ts"; import { createTeamMoveIn, moveInRefusal } from "./team-move-in.ts";
+import { createNoAiNotice } from "./host/no-ai-notice.ts"; import { PASS, ROUTES, dispatchRoutes } from "./routes/table.ts"; import { createSecretCards, vpsTurnVm } from "./host/secret-cards.ts"; import { vpsMountsUsable } from "./vps-home-volume.ts"; import { vpsContainerExec } from "./vps-container-exec.ts"; import { vpsThreadComputers, vpsWriteSecretFile } from "./vps-secret-file.ts"; import { createInternalCredentialRequestRoutes, createSecretCardRoutes } from "./routes/secret-cards.ts"; import { applyIncludedPagesMessage } from "./pages/access.ts"; import { createPublishedPages } from "./pages/service.ts"; import { createInternalToolRoutes } from "./routes/internal-tools.ts"; import { createHelperSuggestionRoutes } from "./routes/helper-suggestion.ts"; import { createXConnectorRoutes } from "./routes/x-connector.ts"; import { createMoveFreeze, switchAutomationsOff } from "./move-freeze.ts"; import { createMoveFreezeRoutes } from "./routes/move-freeze.ts"; import { createMoveWaits } from "./move-waits.ts"; import { assertBotHere, createBotMoves } from "./bot-moves.ts"; import { createBotMoveRoutes } from "./routes/bot-moves.ts"; import { createTeamMoveIn, moveInRefusal } from "./team-move-in.ts";
 import { createHostedSlackRoutes } from "./routes/hosted-slack.ts";
-import { relayTokenStatus } from "./hsp-relay-token.ts";
-import { createBotPresetRoutes } from "./routes/bot-presets.ts"; import { createWorkspaceBannerRoutes, workspaceBannerStore, workspaceBannerSummary } from "./routes/workspace-banner.ts";
+// HSP-only modules, on one line to hold the index.ts size ratchet.
+import { relayTokenStatus } from "./hsp-relay-token.ts"; import { createTeachRecordingRoutes } from "./routes/teach-recording.ts"; import { createTeachTargets } from "./host/teach-targets.ts"; import { recoverInterruptedFollowups } from "./host/boot-followups.ts"; import { createChannelMembers } from "./host/channel-members.ts"; import { createBotComputerAccessRoutes } from "./routes/bot-computer-access.ts"; import { TeachRecorder } from "./teach-recording.ts"; import { createBotPresetRoutes } from "./routes/bot-presets.ts"; import { createWorkspaceBannerRoutes, workspaceBannerStore, workspaceBannerSummary } from "./routes/workspace-banner.ts";
 import { createBotMemoryRoutes } from "./routes/bot-memory.ts";
 import { createBotCreateRoutes } from "./routes/bots-create.ts"; import { privateUntilShared } from "./new-bot-sharing.ts"; import { createShareNotice } from "./host/share-notice.ts"; import { memberDeleteRefusal } from "./host/member-bots.ts";
 import { createTeamOwnerRoutes } from "./routes/team-owners.ts";
@@ -604,12 +604,6 @@ import { createInternalSignInRoutes } from "./routes/sign-in.ts";
 import { createInternalMcpRoutes } from "./routes/internal-mcp.ts";
 import { createInternalThreadRoutes } from "./routes/internal-threads.ts";
 import { createBrowserEvidenceRoutes } from "./routes/browser-evidence.ts";
-import { createTeachRecordingRoutes } from "./routes/teach-recording.ts";
-import { createTeachTargets } from "./host/teach-targets.ts";
-import { recoverInterruptedFollowups } from "./host/boot-followups.ts";
-import { createChannelMembers } from "./host/channel-members.ts";
-import { createBotComputerAccessRoutes } from "./routes/bot-computer-access.ts";
-import { TeachRecorder } from "./teach-recording.ts";
 import { localVmTeachComputer, vpsTeachComputer } from "./teach-desktop.ts";
 import { createSignInCardRoutes } from "./routes/sign-in-cards.ts";
 import { createInternalChiefTeamRoutes } from "./routes/internal-chief-team.ts"; import { createInternalModelRoutes } from "./routes/internal-models.ts"; import { createOwnThreads } from "./host/own-threads.ts"; import { burstDefaultModel, burstProposalRefusal, createBurstHost } from "./host/burst-host.ts"; import { expandBurstTurnText } from "./burst/command.ts"; import { createBurstProposalRoutes, createBurstRoutes } from "./routes/burst.ts";
@@ -6062,7 +6056,7 @@ async function selectableComputers(bot: BotRecord) {
           const status = canWorkOnCloud(cloudEngine(instance)) ? await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), bot.id) : null;
           ready = status?.ready === true;
           canStart = Boolean(status?.daemonUp && status.managed && status.container === "stopped" &&
-            status.image && status.imageMatches && status.network === "private" && vps.vpsMountsUsable(status.mounts) && status.security === "hardened");
+            status.image && status.imageMatches && status.network === "private" && vpsMountsUsable(status.mounts) && status.security === "hardened");
           canCreate = Boolean(status?.configured && status.daemonUp && status.container === "missing");
           ownDesktopAwaitsUpdate ||= vpsDesktopOutdated(status);
           reason = status?.problem ? `${status.problem}${vpsDesktopOutdated(status) ? `. ${VPS_OUTDATED_HINT}` : ""}` : reason;
@@ -12336,17 +12330,9 @@ ROUTES.push(createBrowserSiteRoutes({
   signOut: (target, site) => signOutOfSites(target, site),
 }));
 ROUTES.push(createBotComputerAccessRoutes({ mayEdit: (auth, botId) => Boolean(CLOUD_TEAM) && levelOf(auth, botId) === "edit", botName: (botId) => store.bot(botId)?.name }));
-ROUTES.push(createTeachRecordingRoutes({
-  recorder: new TeachRecorder({ evidence: browserEvidence }),
-  enabled: () => skillAuthoringEnabled(cfg),
-  mayTeach: (botId, auth) => Boolean(CLOUD_TEAM) && levelOf(auth, botId) === "edit",
-  target: createTeachTargets({
-    bot: (id) => store.bot(id), controlKey: botComputerControlKey, inheritsTeamComputer: (bot) => Boolean(inheritedTeamComputer(bot)),
-    ownsLease: (key, leaseId) => computerControl.ownsLease(key, leaseId),
-    vpsComputer: (bot) => vpsTeachComputer(vpsConfigForBot(cfg, bot), bot.id),
-    localVmTarget: localVmTargetForStatus, localVmComputer: localVmTeachComputer, cloudHome: Boolean(CLOUD_HOME),
-  }),
-}));
+ROUTES.push(createTeachRecordingRoutes({ recorder: new TeachRecorder({ evidence: browserEvidence }), enabled: () => skillAuthoringEnabled(cfg), mayTeach: (botId, auth) => Boolean(CLOUD_TEAM) && levelOf(auth, botId) === "edit",
+  target: createTeachTargets({ bot: (id) => store.bot(id), controlKey: botComputerControlKey, inheritsTeamComputer: (bot) => Boolean(inheritedTeamComputer(bot)), ownsLease: (key, leaseId) => computerControl.ownsLease(key, leaseId),
+    vpsComputer: (bot) => vpsTeachComputer(vpsConfigForBot(cfg, bot), bot.id), localVmTarget: localVmTargetForStatus, localVmComputer: localVmTeachComputer, cloudHome: Boolean(CLOUD_HOME) }) }));
 ROUTES.push(createBrowserEvidenceRoutes({ evidence: browserEvidence.attach({ onChange: (listener) => store.onChange(listener), threadExists: (id) => Boolean(threadOwner(id)) }), threadExists: (id) => Boolean(threadOwner(id)) }));
 const loginRoutes = botLogins.routes((id) => Boolean(store.bot(id))); ROUTES.push(createLoginRoutes(loginRoutes), createVaultRoutes({ logins: loginRoutes, secrets: logins, linked: () => botLogins.linkedSecrets(), keys: mcpKeys, reader: vaultReaders.viewer }));
 const privateRecords = createPrivateRecords({ visibleFor: (auth) => visibleTo(viewerFor(auth)), botExists: (id) => Boolean(store.bot(id)), routine: (id) => routines?.listRoutines().find((routine) => routine.id === id) }); const includedHosting = createIncludedHosting({ credential: () => hostingCredential(), dataDir: DATA_DIR, warn: (line) => console.warn(line) }), appPublisher = createAppPublisher({ hosting: includedHosting, botName: (id) => store.bot(id)?.name ?? "", botFolder: workspaceDir, home: homedir(), env: process.env }); ROUTES.push(createPublishedAppsRoutes({ visibleFor: (auth) => visibleTo(viewerFor(auth)), apps: createPublishedApps({ included: { hosting: includedHosting, publisher: appPublisher }, bots: () => store.bots, rooms: () => store.groups, messages: (threadId) => store.messagesFor(threadId), folders: (bot) => [...new Set([bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)].flatMap((threadId) => liveRoots(threadId, bot.id) ?? []))], ownFolder: (botId, threadId) => join(TASK_WORKSPACES_DIR, botId, threadId), pages: () => publishedPages.store.list(), unpublishPage: (pageId) => publishedPages.publisher.unpublish({ pageId }), netlifyToken: (botId, auth, threadId) => savedNetlifyToken(logins, botId, CLOUD_TEAM && !threadId ? null : vaultReaders.turn(threadId ?? ""), auth.kind === "session" ? actorKey(auth) : null), ownChat: (auth, threadId) => auth.kind === "session" && teamHost.privateTo(threadId) === personKey(auth.session), home: homedir(), env: process.env }) })); ROUTES.push(createUsageRoutes({
@@ -13324,13 +13310,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const vm = await attachmentVmForTurn(internalCapability);
           if (!vm) {
             const vpsTarget = vpsExecTargets.get(threadId);
-            if (!vpsTarget || vpsTarget.generation !== internalCapability.generation) {
-              return json(res, 409, { error: "You have no Local VM or cloud computer in this turn, so there is nowhere to run a command." });
-            }
-            const gate = await computerCallGate(internalCapability);
-            if (gate.held) return json(res, 409, { error: controlRefusal(gate) });
-            requireActiveInternalCapability();
-            const result = await vps.vpsContainerExec(vpsTarget.cfg, vpsTarget.botId, vpsTarget.container,
+            if (!vpsTarget || vpsTarget.generation !== internalCapability.generation) return json(res, 409, { error: "You have no Local VM or cloud computer in this turn, so there is nowhere to run a command." });
+            const gate = await computerCallGate(internalCapability); if (gate.held) return json(res, 409, { error: controlRefusal(gate) }); requireActiveInternalCapability();
+            const result = await vpsContainerExec(vpsTarget.cfg, vpsTarget.botId, vpsTarget.container,
               typeof body.command === "string" ? body.command : "",
               { timeoutSeconds: typeof body.timeout_seconds === "number" ? body.timeout_seconds : undefined });
             return json(res, 200, result);

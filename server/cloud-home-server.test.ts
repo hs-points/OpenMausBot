@@ -453,7 +453,7 @@ it("tells the Admin's signed health read a failed turn's code, never its words, 
 
 it("runs a Cloud bot on its own Local VM and keeps it selectable", async () => {
   expect((await api("PATCH", "/api/config", { body: { localVm: { mode: "per-bot", maxInstances: 2 } } })).status).toBe(200);
-  const { body: { bot } } = await api("POST", "/api/bots", { body: { name: "Private VM fixture" } });
+  const { body: { bot } } = await api("POST", "/api/bots", { body: { name: "Private VM fixture", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" } } });
   expect((await api("PATCH", `/api/bots/${bot.id}`, { body: { computer: "vm" } })).status).toBe(200);
   const dump = join(home, "spawn-hang.json");
   rmSync(dump, { force: true });
@@ -462,7 +462,10 @@ it("runs a Cloud bot on its own Local VM and keeps it selectable", async () => {
     expect((await api("POST", `/api/bots/${bot.id}/messages`, { body: { text: "Use your own VM." } })).status).toBe(202);
     await expect.poll(() => existsSync(dump), { timeout: 15_000 }).toBe(true);
     const { mcpConfig } = JSON.parse(readFileSync(dump, "utf8"));
-    expect(mcpConfig.mcpServers.computer.args.some((arg: string) => arg.includes("container-mcp"))).toBe(true);
+    // HSP: with the bot box on (a Cloud home's default since 0.1.152) the Local VM MCP runs on the host behind the boxed
+    // computer bridge, so the turn holds the harness proxy's `computer` server instead of container-mcp itself.
+    const computerArgs: string[] = mcpConfig.mcpServers.computer.args;
+    expect(computerArgs.some((arg) => arg.includes("container-mcp")) || (computerArgs.some((arg) => arg.includes("harness-mcp")) && computerArgs.includes("computer"))).toBe(true);
     const agents = mcpConfig.mcpServers.agents;
     const select = (surface?: string) => fetch(`${base}/api/internal/computer/select`, {
       method: surface ? "POST" : "GET",
@@ -482,7 +485,7 @@ it("runs a Cloud bot on its own Local VM and keeps it selectable", async () => {
 
 it.each(["vm", "local"] as const)("routes a Cloud room mention with Works on %s", async computer => {
   expect((await api("PATCH", "/api/config", { body: { localVm: { mode: "per-bot", maxInstances: 2 } } })).status).toBe(200);
-  const { body: { bot } } = await api("POST", "/api/bots", { body: { name: computer === "vm" ? "Ada" : "Private host" } });
+  const { body: { bot } } = await api("POST", "/api/bots", { body: { name: computer === "vm" ? "Ada" : "Private host", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" } } });
   expect((await api("PATCH", `/api/bots/${bot.id}`, { body: { computer } })).status).toBe(200);
   const created = await api("POST", "/api/groups", { body: {
     name: "Accounting fixture", memberIds: [bot.id], setup: { bulletin: "", defaultResponder: { kind: "mentions" } },

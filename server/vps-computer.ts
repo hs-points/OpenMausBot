@@ -18,13 +18,11 @@ import {
   IMAGE_LAYER_LABEL,
   IMAGE_LAYER_VERSION,
   MANAGED_LABEL,
-  DISPLAY,
-  clipExecOutput,
-  type ContainerExecResult,
 } from "./container-computer.ts";
 import { type DockerHardeningConfig } from "./container-isolation.ts";
 import { PIDS_LIMIT, raisePidsLimit } from "./container-limits.ts";
 import { syncVpsLimits, vpsCapabilityArgs, vpsResourceArgs, vpsSecurityAccepted } from "./vps-container-settings.ts";
+import { mountState, VPS_HOME_TARGET, vpsHomeVolumeName, vpsMountsUsable } from "./vps-home-volume.ts";
 import type { VpsComputerSettings } from "../shared/vps-computer-settings.ts";
 import { DATA_DIR, isValidSshAlias, vpsSshAlias, type AppConfig } from "./config.ts";
 import { augmentedPath } from "./env-path.ts";
@@ -49,8 +47,8 @@ function vpsEnvironmentId(): string {
   return vpsEnvironmentIdCache;
 }
 
-const CONTAINER_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/;
-const CONTAINER_ID = /^[a-f0-9]{12,64}$/i;
+export const CONTAINER_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/;
+export const CONTAINER_ID = /^[a-f0-9]{12,64}$/i;
 const FULL_CONTAINER_ID = /^[a-f0-9]{64}$/i;
 const MANAGED_VPS_CONTAINER_NAME = /^openmausbot-vps-[a-z0-9]{1,12}-[a-f0-9]{12}$/;
 const IMAGE_ID = /^sha256:[a-f0-9]{64}$/i;
@@ -336,36 +334,6 @@ function privateDockerIpv4(value: string | undefined): boolean {
 function viewerPassword(env: string[] | undefined): string | null {
   const value = env?.find((entry) => entry.startsWith("VNC_PW="))?.slice("VNC_PW=".length);
   return value && /^[A-Za-z0-9_-]{8,128}$/.test(value) ? value : null;
-}
-
-/** HSP: the computer's home lives on this named volume, so removing or rebuilding the container keeps sign-ins,
- * browser profiles and files. `docker rm` without -v leaves it; deleting it is a deliberate manual step. */
-export const VPS_HOME_TARGET = "/home/cua";
-export function vpsHomeVolumeName(containerName: string): string {
-  return `${containerName}-home`;
-}
-export function vpsMountsUsable(mounts: VpsComputerStatus["mounts"]): boolean {
-  return mounts === "none" || mounts === "home";
-}
-
-/** "home" = exactly this computer's own home volume and nothing else; any host folder, other volume or shared mount is unsafe. */
-function mountState(detail: {
-  Mounts?: unknown;
-  HostConfig?: { Binds?: string[] | null; VolumesFrom?: string[] | null };
-}, containerName: string): "none" | "home" | "unsafe" {
-  if (detail.HostConfig?.Binds && detail.HostConfig.Binds.length > 0) return "unsafe";
-  if (detail.HostConfig?.VolumesFrom && detail.HostConfig.VolumesFrom.length > 0) return "unsafe";
-  if (!Array.isArray(detail.Mounts)) return "unsafe";
-  if (detail.Mounts.length === 0) return "none";
-  if (detail.Mounts.length !== 1) return "unsafe";
-  const mount = detail.Mounts[0] as { Type?: unknown; Name?: unknown; Destination?: unknown; Driver?: unknown; RW?: unknown };
-  return mount.Type === "volume" &&
-    mount.Name === vpsHomeVolumeName(containerName) &&
-    mount.Destination === VPS_HOME_TARGET &&
-    (mount.Driver === undefined || mount.Driver === "local") &&
-    mount.RW === true
-    ? "home"
-    : "unsafe";
 }
 
 function hasNoPublishedPorts(config: {
@@ -1179,42 +1147,6 @@ async function startDesktopTunnel(cfg: AppConfig, botId: string, alias: string, 
   return tunnel;
 }
 
-const VPS_EXEC_EXIT = "__omb_exit__=";
-
-/** vm_exec on a bot's self-hosted VPS computer: runs as the desktop user inside the bot's own container, never on the
- * VPS host, and opens no window. The command travels as argv; the wrapper prints its exit code so the runner, which
- * rejects any non-zero exit, still hands back the output. */
-export async function vpsContainerExec(
-  cfg: AppConfig,
-  botId: string,
-  containerRef: string | undefined,
-  command: string,
-  options: { timeoutSeconds?: number; runner?: VpsCommandRunner } = {},
-): Promise<ContainerExecResult> {
-  if (!command.trim()) throw Object.assign(new Error("command is required"), { status: 400 });
-  if (command.length > 20_000) throw Object.assign(new Error("command is too long"), { status: 400 });
-  if (options.timeoutSeconds !== undefined && !Number.isFinite(options.timeoutSeconds)) {
-    throw Object.assign(new Error("timeout_seconds must be finite"), { status: 400 });
-  }
-  const alias = vpsSshAlias(cfg);
-  if (!alias) throw Object.assign(new Error("VPS is not configured"), { status: 409 });
-  const container = containerRef ?? vpsContainerName(botId);
-  if (!CONTAINER_NAME.test(container) && !CONTAINER_ID.test(container)) throw new Error("invalid VPS container");
-  const seconds = Math.min(Math.max(Math.floor(options.timeoutSeconds ?? 60), 1), 300);
-  const { stdout, stderr } = await (options.runner ?? defaultRunner)(vpsDockerArgs(alias, [
-    "exec", "-u", "cua", "-w", "/home/cua", "-e", "HOME=/home/cua", "-e", `DISPLAY=${DISPLAY}`, container,
-    "sh", "-c", `timeout -k 5 ${seconds} sh -lc "$1"; echo "${VPS_EXEC_EXIT}$?" >&2`, "omb-exec", command,
-  ]), { timeoutMs: (seconds + 30) * 1000 });
-  const marker = stderr.lastIndexOf(VPS_EXEC_EXIT);
-  const exitCode = marker >= 0 ? Number.parseInt(stderr.slice(marker + VPS_EXEC_EXIT.length), 10) : -1;
-  const errors = marker >= 0 ? stderr.slice(0, marker) : stderr;
-  return {
-    exitCode: Number.isFinite(exitCode) ? exitCode : -1,
-    stdout: clipExecOutput(stdout),
-    stderr: clipExecOutput(errors),
-    timedOut: exitCode === 124 || exitCode === 137,
-  };
-}
 
 export function vpsContainerMcpArgs(alias: string, containerName: string): string[] {
   if (!isValidSshAlias(alias) || (!CONTAINER_NAME.test(containerName) && !CONTAINER_ID.test(containerName))) {
