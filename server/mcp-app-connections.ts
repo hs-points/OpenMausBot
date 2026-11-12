@@ -4,6 +4,7 @@
 import { createHash } from "node:crypto";
 
 import { APP_EXTENSION_KEY } from "../shared/app.ts";
+import { redactSecretsInText } from "../shared/redact.ts";
 import type { McpServerSpec, RemoteMcpSpec, StdioMcpSpec } from "./contracts.ts";
 import { botBox } from "./bot-box/box.ts";
 import { createLineSplitter } from "./mcp-bridge.ts";
@@ -33,6 +34,12 @@ export interface AppClient {
 /** Whose turns a command server is started like: its bot's (own folder in the box), or any bot's (no bot's folder). */
 export type AppServerAs = NonNullable<McpProbeOptions["asBot"]>;
 
+/** HSP: the server's own child, never a bot's. A boxed turn's computer bridge (server/local-vm-computer-tools.ts) runs the
+ * Local VM or VPS computer MCP on the host because the box has no network, no docker socket and no usable ssh_config;
+ * since 0.1.152 a command server here is boxed by default, so that child must say it belongs outside the box. */
+export const ON_HOST = Object.freeze({ host: true as const });
+type AppServerPlace = AppServerAs | typeof ON_HOST;
+
 export interface AppClientHooks {
   onNotification(method: string): void;
 }
@@ -46,12 +53,13 @@ class StdioAppClient implements AppClient {
   extensions: "ok" | "refused" | undefined;
   serverInfo: Json | undefined;
 
-  constructor(server: StdioMcpSpec, hooks: AppClientHooks, as: AppServerAs = {}) {
-    // With the box off `box` changes nothing, and the server starts where it always did.
+  constructor(server: StdioMcpSpec, hooks: AppClientHooks, as: AppServerPlace = {}) {
+    // With the box off `box` changes nothing, and the server starts where it always did. ON_HOST starts it there too.
+    const bot = "host" in as ? null : as;
     this.child = spawnCli(server.command, server.args, {
-      ...(botBox.enabled() ? (as.cwd ? { cwd: as.cwd } : {}) : { cwd: process.cwd() }),
+      ...(botBox.enabled() && bot ? (bot.cwd ? { cwd: bot.cwd } : {}) : { cwd: process.cwd() }),
       env: probeEnvironment(server), stdio: ["pipe", "pipe", "pipe"],
-      box: { ...(as.id ? { botId: as.id } : {}), allowEnv: Object.keys(server.env), configured: true },
+      box: bot ? { ...(bot.id ? { botId: bot.id } : {}), allowEnv: Object.keys(server.env), configured: true } : false,
     });
     const splitter = createLineSplitter((line) => this.onLine(line, hooks));
     this.child.stdout.on("data", (chunk: Buffer) => {
@@ -60,10 +68,19 @@ class StdioAppClient implements AppClient {
       if (this.stdoutBytes > MAX_REMOTE_MCP_BYTES) { this.fail(new McpHttpError("protocol", "message too large")); return; }
       splitter.push(chunk);
     });
-    // Child stderr may carry secrets: drained, never kept.
-    this.child.stderr.resume();
-    this.child.once("error", () => this.fail(new McpHttpError("network", "could not start the server")));
-    this.child.once("close", () => this.fail(new McpHttpError("network", "the server stopped")));
+    // Child stderr may carry secrets: drained, never kept. HSP: an ON_HOST child (the boxed computer bridge) keeps only
+    // its last line, redacted, and logs it if the child stops unasked, so a host-side computer that will not start is not silent.
+    let lastStderr = "";
+    if (bot) this.child.stderr.resume();
+    else this.child.stderr.on("data", (chunk: Buffer) => {
+      const lines = chunk.toString("utf8").split(/\r?\n/).filter((line) => line.trim());
+      if (lines.length) lastStderr = lines.at(-1)!.slice(-300);
+    });
+    const hostStopped = (what: string) => {
+      if (!bot && !this.closed) console.warn(`computer MCP on host (${server.command}) ${what}${lastStderr ? `: ${redactSecretsInText(lastStderr)}` : ""}`);
+    };
+    this.child.once("error", () => { hostStopped("could not start"); this.fail(new McpHttpError("network", "could not start the server")); });
+    this.child.once("close", () => { hostStopped("stopped"); this.fail(new McpHttpError("network", "the server stopped")); });
   }
 
   private onLine(line: string, hooks: AppClientHooks): void {
@@ -173,7 +190,7 @@ class RemoteAppClient implements AppClient {
   }
 }
 
-export async function openAppClient(server: McpServerSpec, hooks: AppClientHooks, extension: boolean, signal: AbortSignal, as: AppServerAs = {}): Promise<AppClient> {
+export async function openAppClient(server: McpServerSpec, hooks: AppClientHooks, extension: boolean, signal: AbortSignal, as: AppServerPlace = {}): Promise<AppClient> {
   const client = "url" in server ? new RemoteAppClient(server, hooks) : new StdioAppClient(server, hooks, as);
   try {
     await client.initialize(signal, extension);

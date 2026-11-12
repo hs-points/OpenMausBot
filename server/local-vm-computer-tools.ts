@@ -1,8 +1,9 @@
 import { CONTROL_ACT_WITHIN_MS, CONTROL_WAITED, controlRefusal, type ControlState } from "./control-client.ts";
 import { HARNESS_CALL_BUDGET_MS } from "./harness-budget.ts";
-import { openAppClient } from "./mcp-app-connections.ts";
+import { ON_HOST, openAppClient } from "./mcp-app-connections.ts";
 
-/** Host-side MCP child for a boxed turn: Local VM containers and the self-hosted VPS both run through here. */
+/** Host-side MCP child for a boxed turn: Local VM containers and the self-hosted VPS both run through here, outside the box
+ * (ON_HOST): inside it docker has no socket and ssh has no network and refuses the root-owned /etc/ssh/ssh_config. */
 export async function localVmComputerRpc(request: unknown, deps: {
   server: { command: string; args: string[]; env: Record<string, string> };
   gate(): Promise<ControlState>;
@@ -26,7 +27,7 @@ export async function localVmComputerRpc(request: unknown, deps: {
     deps.assertActive(); deps.assertClaim();
     if (Date.now() - arrivedAt > CONTROL_ACT_WITHIN_MS) return { content: [{ type: "text", text: CONTROL_WAITED }], isError: true };
   }
-  const client = await openAppClient(deps.server, { onNotification() {} }, false, signal);
+  const client = await openAppClient(deps.server, { onNotification() {} }, false, signal, ON_HOST);
   try {
     if (acting) {
       const state = await deps.gate();
