@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { botBox, type WrappedSpawn } from "./bot-box/box.ts";
 import { visibleInBox } from "./bot-box/plan.ts";
 import { DATA_DIR, ensureDirs } from "./config.ts";
-import { AppConnections } from "./mcp-app-connections.ts";
+import { AppConnections, ON_HOST, openAppClient } from "./mcp-app-connections.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
 /** A stand-in for bubblewrap with no namespaces: it runs what follows `--`, and what it runs can tell it is inside. */
@@ -96,6 +96,29 @@ describe.skipIf(process.platform === "win32")("an app's connection to a command 
     // `configured` is what keeps an environment value naming a data-folder path out of the box (bot-box/plan.ts).
     expect(wrap.mock.calls[0]![0]).toMatchObject({ botId: "bot-a", allowEnv: ["XDG_CONFIG_HOME"], configured: true });
     expect(visibleInBox((wrap.mock.results[0]!.value as WrappedSpawn).plan, secrets), "a server file its command line names").toBe("none");
+  }, 60_000);
+
+  // HSP: the boxed computer bridge's own child (Local VM docker, VPS docker over ssh) needs the host's socket, network and
+  // ssh config, so ON_HOST starts it outside the box even while turns are boxed, and says why it stopped.
+  it("starts an ON_HOST child outside the box, and logs its last stderr line when it stops unasked", async () => {
+    ensureDirs();
+    const scratch = mkdtempSync(join(tmpdir(), "omb-app-onhost-"));
+    dirs.push(scratch);
+    const fakeBwrap = join(scratch, "fake-bwrap.sh");
+    writeFileSync(fakeBwrap, MARKING_BWRAP);
+    chmodSync(fakeBwrap, 0o755);
+    await botBox.start({
+      dataDir: DATA_DIR, home: homedir(), port: 8799, denyEnv: new Set(), env: {}, log: () => {},
+      detect: () => ({ box: "bwrap", reason: null, tools: { bwrap: fakeBwrap, socat: "/usr/bin/true" } }),
+    });
+    const wrap = vi.spyOn(botBox, "wrap");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const marker = join(scratch, "started.txt");
+    const failing = { command: "/bin/sh", args: ["-c", 'printf "%s\\n" "${IN_FAKE_BOX:-outside}" >> "$0"; echo "ssh: connect to host kvm8 port 22: refused" >&2', marker], env: {} };
+    await expect(openAppClient(failing, { onNotification() {} }, false, AbortSignal.timeout(20_000), ON_HOST)).rejects.toThrow();
+    expect(readFileSync(marker, "utf8").trim()).toBe("outside");
+    expect(wrap).not.toHaveBeenCalled();
+    expect(warn.mock.calls.map((call) => String(call[0])).join("\n")).toContain("computer MCP on host (/bin/sh) stopped: ssh: connect to host kvm8 port 22: refused");
   }, 60_000);
 
   it("with the box off, starts it as it did", async () => {
