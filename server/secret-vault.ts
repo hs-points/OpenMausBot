@@ -148,15 +148,6 @@ export class SecretVault {
     return { file: shown, until };
   }
 
-  /** Notes a file secret already written elsewhere (a remote computer): the bot is pointed at `shown`, and the value is
-   * masked in transcripts and logs like any other held secret. Nothing is written here. */
-  keepRemoteFile(messageId: string, value: string, shown: string): string {
-    const until = this.now() + SECRET_FILE_TTL_MS;
-    this.byCard.set(messageId, { file: shown, until });
-    this.hold(value, until);
-    return shown;
-  }
-
   /** What this card's save gave the bot, while it still works; null after a restart, its use or its expiry. */
   savedFor(messageId: string): SavedSecret | null {
     const saved = this.byCard.get(messageId);

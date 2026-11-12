@@ -1,12 +1,12 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import "../server-line-packs.ts";
 import type { BotRecord, Message } from "../store.ts";
 import { EMAIL_CANT_SEND_TEXT } from "../email/instructions.ts";
-import { createSecretCards, remoteComputer, savedSecretText, type SecretCardsDeps } from "./secret-cards.ts";
+import { createSecretCards, type SecretCardsDeps } from "./secret-cards.ts";
 import { CREDENTIAL_TARGETS } from "../../shared/credential-request.ts";
 import { redactBotAuthored } from "../message-redaction.ts";
 import { redactSecretsInText } from "../redact.ts";
@@ -19,9 +19,8 @@ import type { LoginBots } from "../../shared/logins.ts";
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-/** `privateTo`: a Team Cloud's private chats, by conversation, and whose each is; any other conversation is the team's.
- * `extra` (HSP): deps overrides, e.g. a VPS turn's turnVm and writeRemoteFile. */
-function fixture(language?: string, linked?: (vaultStore: VaultStore) => SecretCardsDeps["botLogins"], privateTo: Record<string, string> = {}, extra: Record<string, unknown> = {}) {
+/** `privateTo`: a Team Cloud's private chats, by conversation, and whose each is; any other conversation is the team's. */
+function fixture(language?: string, linked?: (vaultStore: VaultStore) => SecretCardsDeps["botLogins"], privateTo: Record<string, string> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "omb-secret-cards-"));
   dirs.push(dataDir);
   const lines: Message[] = [];
@@ -47,7 +46,7 @@ function fixture(language?: string, linked?: (vaultStore: VaultStore) => SecretC
     botLogins: linked?.(vaultStore) ?? { credentialConfig: (config) => ({ ...config, onePassword: { connected: false } }), linkedSecret: async () => null },
     phoneSecrets: { provide: async () => {}, open: () => {} } as never, phoneSecretSubmissions: { has: () => false } as never,
     connectorThread: () => ({ bot, group: undefined }), answerCardNode: (_thread, _id, text) => { resumed.push(text); return true; }, followCard: () => {}, dataDir, providerKeysRefused: false,
-    layerFolder: () => dataDir, turnVm: () => undefined, ...(language ? { threadLanguage: () => language } : {}), ...extra,
+    layerFolder: () => dataDir, turnVm: () => undefined, ...(language ? { threadLanguage: () => language } : {}),
   });
   return { cards, lines, bot, vaultStore, resumed, dataDir };
 }
@@ -113,7 +112,7 @@ describe("a secret a card saves to the Vault", () => {
     const one = fixture();
     const card = await ask(one, "t1");
     expect(card.status).toBe(201);
-    expect((await one.cards.saveCustomSecret("ledger", "t1", String(card.body.messageId), `  ${KEY} `)).status).toBe(200);
+    expect(one.cards.saveCustomSecret("ledger", "t1", String(card.body.messageId), `  ${KEY} `).status).toBe(200);
     expect(one.vaultStore.listSecrets(TEAM_READER)).toMatchObject([{ name: "Stripe secret key", source: "card", bots: ["ledger"], refOnly: true }]);
     const fromCard = refIn(one.resumed[0]);
     expect(fromCard).toBeDefined();
@@ -135,7 +134,7 @@ describe("a secret a card saves to the Vault", () => {
   it("redeems as a vault: pointer to the saved item, kept out of config.json, and gives only that server the item once it is saved", async () => {
     const one = fixture();
     const card = await ask(one, "t1");
-    await one.cards.saveCustomSecret("ledger", "t1", String(card.body.messageId), KEY);
+    one.cards.saveCustomSecret("ledger", "t1", String(card.body.messageId), KEY);
     const item = one.vaultStore.listSecrets(TEAM_READER)[0]!.id;
     const redeemed = one.cards.redeemMcpServer({ headers: { Authorization: `Bearer ${refIn(one.resumed[0])}` } }, "ledger", "t1", "stripe");
     expect(redeemed.ok && redeemed.value).toEqual({ headers: { Authorization: `Bearer vault:${item}` } });
@@ -169,7 +168,7 @@ describe("a secret a card saves to the Vault", () => {
     one.vaultStore.saveSecret({ name: "Stripe secret key", value: KEY, source: "card", bots: ["ledger"], refOnly: true });
     const card = await ask(one, "t1", { replace: true });
     expect(card.status).toBe(201);
-    await one.cards.saveCustomSecret("ledger", "t1", String(card.body.messageId), "sk_test_fake-card-vault-2");
+    one.cards.saveCustomSecret("ledger", "t1", String(card.body.messageId), "sk_test_fake-card-vault-2");
     expect(one.vaultStore.secretValues()).toEqual(["sk_test_fake-card-vault-2"]);
   });
 });
@@ -182,7 +181,7 @@ describe("on a Team Cloud, a secret typed into a card in a member's private chat
     one.cards.requestCredential(one.bot, threadId, { label: "Stripe secret key", reason: "For test charges.", delivery: "ref", ...extra });
   async function adaSaves(one: ReturnType<typeof fixture>) {
     const card = await ask(one, "ada-chat");
-    expect((await one.cards.saveCustomSecret("ledger", "ada-chat", String(card.body.messageId), KEY)).status).toBe(200);
+    expect(one.cards.saveCustomSecret("ledger", "ada-chat", String(card.body.messageId), KEY).status).toBe(200);
     return one.vaultStore.listSecrets({ person: ADA, team: false })[0]!;
   }
 
@@ -206,7 +205,7 @@ describe("on a Team Cloud, a secret typed into a card in a member's private chat
   it("is never offered by name under Use a saved one outside her own chats", async () => {
     const one = team();
     const live = await ask(one, "ada-chat", { label: "STRIPE_LIVE_KEY" });
-    await one.cards.saveCustomSecret("ledger", "ada-chat", String(live.body.messageId), KEY);
+    one.cards.saveCustomSecret("ledger", "ada-chat", String(live.body.messageId), KEY);
     const own = one.vaultStore.listSecrets({ person: ADA, team: false })[0]!;
     for (const threadId of ["ben-chat", "ledger-main", "room-1"]) {
       const card = await ask(one, threadId);
@@ -231,7 +230,7 @@ describe("on a Team Cloud, a secret typed into a card in a member's private chat
     const one = team();
     const shared = one.vaultStore.saveSecret({ name: "Stripe secret key", value: "sk_test_fake-team", source: "settings", bots: ["ledger"] });
     const card = await ask(one, "ada-chat", { replace: true });
-    await one.cards.saveCustomSecret("ledger", "ada-chat", String(card.body.messageId), KEY);
+    one.cards.saveCustomSecret("ledger", "ada-chat", String(card.body.messageId), KEY);
     expect(one.vaultStore.secret(shared.id)?.value).toBe("sk_test_fake-team");
     expect(one.vaultStore.usableSecret("Stripe secret key", "ledger", "ref", { person: ADA, team: true })?.value).toBe(KEY);
     expect(one.vaultStore.usableSecret("Stripe secret key", "ledger", "ref", { person: BEN, team: true })?.id).toBe(shared.id);
@@ -241,7 +240,7 @@ describe("on a Team Cloud, a secret typed into a card in a member's private chat
   it("is the team's when typed in a shared chat, as before", async () => {
     const one = team();
     const card = await ask(one, "ledger-main");
-    await one.cards.saveCustomSecret("ledger", "ledger-main", String(card.body.messageId), KEY);
+    one.cards.saveCustomSecret("ledger", "ledger-main", String(card.body.messageId), KEY);
     expect(one.vaultStore.listSecrets(TEAM_READER)).toHaveLength(1);
     for (const threadId of ["ada-chat", "ben-chat", "room-1"]) expect((await ask(one, threadId)).status, threadId).toBe(200);
   });
@@ -277,46 +276,6 @@ describe("Use a saved one on a secret card", () => {
     expect(one.cards.savedChoices("ledger", "t1", replace).map((choice) => choice.name)).toEqual(["Stripe test key"]);
     expect(await one.cards.useSavedSecret("ledger", "t1", replace, "not-offered")).toMatchObject({ status: 404 });
     expect(one.resumed).toEqual([]);
-  });
-});
-
-describe("a file secret for a remote VPS computer", () => {
-  const CODE = "482913";
-  const vpsVm = "vps:hsp-vps:openmausbot-vps-bot-0123456789ab";
-  const asked = async (extra: Record<string, unknown>, vm: string | undefined) => {
-    const made = fixture(undefined, undefined, {}, { turnVm: () => vm, phoneSecretSubmissions: { has: () => false }, ...extra });
-    await made.cards.requestCredential(made.bot, "ledger-main", { label: "WeCom code", reason: "WeCom emailed a sign-in code.", delivery: "file" });
-    return made;
-  };
-
-  it("records the VPS computer on the card and writes the value there, not on this host", async () => {
-    const writeRemoteFile = vi.fn(async (_alias: string, _container: string, threadId: string, messageId: string) =>
-      `/home/cua/workspace/.openmausbot-secrets/${threadId}/${messageId}`);
-    const { cards, lines, bot, dataDir } = await asked({ writeRemoteFile }, vpsVm);
-    expect(lines[0]!.secret!.vm).toBe(vpsVm);
-    const saved = await cards.saveCustomSecret(bot.id, "ledger-main", lines[0]!.id, CODE);
-    expect(saved.status).not.toBe(500);
-    expect(writeRemoteFile).toHaveBeenCalledExactlyOnceWith("hsp-vps", "openmausbot-vps-bot-0123456789ab", "ledger-main", lines[0]!.id, CODE);
-    expect(JSON.stringify(saved.body)).not.toContain(CODE);
-    expect(redactSecretsInText(`typed ${CODE} into the phone`)).not.toContain(CODE);
-    expect(readdirSync(dataDir)).not.toContain(".openmausbot-secrets");
-  });
-
-  it("tells the bot the path on the computer and fails closed when it cannot be written", async () => {
-    const path = "/home/cua/workspace/.openmausbot-secrets/ledger-main/m1";
-    const ok = await asked({ writeRemoteFile: async () => path }, vpsVm);
-    await ok.cards.saveCustomSecret(ok.bot.id, "ledger-main", ok.lines[0]!.id, CODE);
-    expect(savedSecretText("WeCom code", { file: path })).toContain(`cat '${path}'`);
-    const failing = await asked({ writeRemoteFile: async () => { throw new Error("the VPS computer could not take the secret file"); } }, vpsVm);
-    const result = await failing.cards.saveCustomSecret(failing.bot.id, "ledger-main", failing.lines[0]!.id, CODE);
-    expect(result.status).toBe(500);
-    expect(JSON.stringify(result.body)).not.toContain(CODE);
-  });
-
-  it("parses only the vps: form as a remote computer", () => {
-    expect(remoteComputer(vpsVm)).toEqual({ alias: "hsp-vps", container: "openmausbot-vps-bot-0123456789ab" });
-    expect(remoteComputer("pool:3")).toBeNull();
-    expect(remoteComputer(undefined)).toBeNull();
   });
 });
 
