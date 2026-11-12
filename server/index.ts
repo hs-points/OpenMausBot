@@ -505,7 +505,7 @@ import {
 } from "./presets.ts";
 import { OrgLibrary } from "./org-library.ts";
 import { shouldMountLocalComputer } from "./local-routing.ts";
-import { autoLocalVmAttachable, containerComputerMcp as hostContainerComputerMcp, type ContainerComputerStatus } from "./container-computer.ts";
+import { autoLocalVmAttachable, type ContainerComputerStatus } from "./container-computer.ts";
 import { startStoppedPodmanMachine } from "./podman-machine.ts";
 import { keepTransient, lazyClaimFailedText, lazyClaimRetryText, settledWithin, startAutoVmClaim, withinBudget, type AutoVmClaimSlot, type AutoVmClaimTable } from "./auto-vm-claims.ts";
 import { CONTROL_ACT_WITHIN_MS, CONTROL_BUSY, CONTROL_HANDED_BACK, CONTROL_WAIT_MS, CONTROL_WAITED, controlRefusal, type ControlState } from "./control-client.ts";
@@ -5809,8 +5809,7 @@ function boxedComputerTools(control: { token: string }, server: () => McpServer,
 }
 function localVmComputerTools(runtime: Runtime, control: { url: string; token: string }, target: LocalVmTarget) {
   if (!botBox.enabled()) return containerComputerMcp(runtime, control, target);
-  // HSP: the host runs this MCP child, and the host has the Docker socket, so upstream's bot-box refusal (local-vm-box.ts) does not apply here.
-  return boxedComputerTools(control, () => hostContainerComputerMcp(runtime, undefined, target), (capability) => {
+  return boxedComputerTools(control, () => containerComputerMcp(runtime, undefined, target), (capability) => {
     const owner = localVmLeaseFor(target).current(localVmOwnerBusy);
     if (localVmThreadTargets.get(capability.threadId)?.key === target.key && owner?.threadId === capability.threadId && owner.botId === capability.botId) return;
     throw Object.assign(new Error("This turn no longer has its Local VM"), { status: 403 });
