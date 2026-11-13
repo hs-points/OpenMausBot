@@ -927,7 +927,7 @@ posixOnly("mid-turn steering e2e", () => {
     await waitFor(async () => (await getGroup())?.working === false, "the steered room turn to settle");
   }, 40_000);
 
-  it("a queued room attachment refuses the fold and waits for a real turn", async () => {
+  it("a room steer folds a queued attachment into the running Codex turn as an inline image", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     const instances = (await api("GET", "/api/instances")).body.instances;
     const model = instances.find((i: any) => i.instanceId === "codex").models.default;
@@ -958,22 +958,23 @@ posixOnly("mid-turn steering e2e", () => {
       threadId: room.threadId,
     });
     expect(steered.status).toBe(200);
-    expect(steered.body).toMatchObject({ ok: true, queued: true, blockedBy: "images" });
-    expect(steered.body.steered).toBeUndefined();
+    expect(steered.body).toMatchObject({ ok: true, steered: true });
+    expect(steered.body.queueIds).toEqual([queued.body.queueId]);
+    expect(steered.body.blockedBy).toBeUndefined();
     expect((await getGroup())?.working).toBe(true);
-    expect((await getGroup())?.messages.some((m: any) => m.text === imageText)).toBe(false);
+    expect((await getGroup())?.messages.find((m: any) => m.text === imageText)?.steered).toBe(true);
 
     await api("POST", `/api/groups/${room.id}/interrupt`, {});
-    await waitFor(
-      async () => (await getGroup())?.messages.some((m: any) => m.text === imageText),
-      "the attachment line to drain",
-    );
-    await api("POST", `/api/groups/${room.id}/interrupt`, {});
-    await waitFor(async () => (await getGroup())?.working === false, "the drained attachment turn to settle");
+    await waitFor(async () => (await getGroup())?.working === false, "the steered room turn to settle");
 
     const nativeRows = readFileSync(join(home, ".openmausbot", "native", `${room.threadId}.ndjson`), "utf8")
       .trim().split("\n").map((line) => JSON.parse(line));
-    expect(nativeRows.filter((row) => row.dir === "out" && row.msg?.method === "turn/steer")).toHaveLength(0);
+    const steerRows = nativeRows.filter((row) => row.dir === "out" && row.msg?.method === "turn/steer");
+    expect(steerRows).toHaveLength(1);
+    expect(steerRows[0].msg.params.input).toEqual([
+      { type: "text", text: expect.stringContaining("look at the clip") },
+      { type: "image", url: expect.stringContaining("[inline image omitted") },
+    ]);
   }, 40_000);
 
   it("a room steer folds a queued attachment into the running Claude turn as native images", async () => {
@@ -1032,7 +1033,7 @@ posixOnly("mid-turn steering e2e", () => {
     ]);
   }, 40_000);
 
-  it("the queue steer endpoint keeps a codex attachment queued and says why", async () => {
+  it("a codex message with a picture during a live turn is steered into it, not queued", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     const instances = (await api("GET", "/api/instances")).body.instances;
     const codexInstance = instances.find((i: any) => i.instanceId === "codex");
@@ -1048,23 +1049,21 @@ posixOnly("mid-turn steering e2e", () => {
     const imagePath = join(attachments, "123e4567-e89b-42d3-a456-426614174008.png");
     writeFileSync(imagePath, "codex png");
     const imageText = `see this\n\n<attached-image path="${imagePath}" name="codex.png" />`;
-    const queued = await api("POST", `/api/bots/${created.id}/messages`, { text: imageText });
-    expect(queued.status).toBe(202);
-    expect(queued.body).toMatchObject({ ok: true, queued: true });
-
-    const still = await api("POST", `/api/bots/${created.id}/queue/${queued.body.queueId}/steer`, {
-      threadId: created.threadId,
-    });
-    expect(still.status).toBe(200);
-    expect(still.body).toMatchObject({ ok: true, queued: true, blockedBy: "images" });
-    expect(still.body.steered).toBeUndefined();
+    const sent = await api("POST", `/api/bots/${created.id}/messages`, { text: imageText });
+    expect(sent.status).toBe(202);
+    expect(sent.body).toMatchObject({ ok: true, steered: true });
+    expect(sent.body.queued).toBeUndefined();
     expect((await getBot(created.id)).busy).toBe(true);
-    expect((await getBot(created.id)).messages.some((m: any) => m.text === imageText)).toBe(false);
+    expect((await getBot(created.id)).messages.find((m: any) => m.text === imageText)?.steered).toBe(true);
     const nativeRows = readFileSync(join(home, ".openmausbot", "native", `${created.threadId}.ndjson`), "utf8")
       .trim().split("\n").map((line) => JSON.parse(line));
-    expect(nativeRows.filter((row) => row.dir === "out" && row.msg?.method === "turn/steer")).toHaveLength(0);
+    const steerRows = nativeRows.filter((row) => row.dir === "out" && row.msg?.method === "turn/steer");
+    expect(steerRows).toHaveLength(1);
+    expect(steerRows[0].msg.params.input).toEqual([
+      { type: "text", text: expect.stringContaining("see this") },
+      { type: "image", url: expect.stringContaining("[inline image omitted") },
+    ]);
 
-    expect((await api("DELETE", `/api/bots/${created.id}/queue/${queued.body.queueId}`, { threadId: created.threadId })).status).toBe(200);
     await api("POST", `/api/bots/${created.id}/interrupt`);
     await waitFor(async () => (await getBot(created.id)).busy === false, "the codex turn to settle");
   }, 40_000);

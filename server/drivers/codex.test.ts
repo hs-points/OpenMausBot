@@ -3383,6 +3383,43 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     await expect.poll(() => processIsAlive(snapshot.pid), { timeout: 5_000 }).toBe(false);
   }, 20_000);
 
+  it("steers a message with a picture into the running turn, with the bytes inline and out of the native log", async () => {
+    const dump = join(scratch, "codex-steer-image.json");
+    const attachments = join(scratch, "steer-attachments");
+    const imagePath = join(attachments, "shot.png");
+    const bytes = Buffer.from("\x89PNG steered pixels");
+    process.env.FAKE_CODEX_DUMP = dump;
+    mkdirSync(NATIVE_DIR, { recursive: true });
+    mkdirSync(attachments, { recursive: true });
+    writeFileSync(imagePath, bytes);
+    await create({ mode: "approval" });
+    expect(instance.adapter.capabilities.steerImages).toBe(true);
+
+    await instance.adapter.sendTurn({ threadId: "t-codex-steer-image", text: "one" });
+    await recorder.until((e) => e.type === "request.opened");
+    await expect(instance.adapter.steer?.("t-codex-steer-image", "look at this", [{ path: imagePath, mime: "image/png", bytes: bytes.length }]))
+      .resolves.toBe("steered");
+
+    const snapshot = JSON.parse(readFileSync(dump, "utf8"));
+    expect(snapshot.calls.find((c: any) => c.method === "turn/steer")?.params.input).toEqual([
+      { type: "text", text: "look at this" },
+      { type: "image", url: `data:image/png;base64,${bytes.toString("base64")}` },
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain(attachments);
+    // A picture that cannot be read is provably undelivered: the caller queues the message.
+    await expect(instance.adapter.steer?.("t-codex-steer-image", "and this", [{ path: join(attachments, "gone.png"), mime: "image/png", bytes: 1 }]))
+      .resolves.toBe("refused");
+    expect(JSON.parse(readFileSync(dump, "utf8")).calls.filter((c: any) => c.method === "turn/steer")).toHaveLength(1);
+
+    flushNativeLog("t-codex-steer-image");
+    const nativeLog = readFileSync(join(NATIVE_DIR, "t-codex-steer-image.ndjson"), "utf8");
+    expect(nativeLog).toContain("[inline image omitted");
+    expect(nativeLog).not.toContain(bytes.toString("base64"));
+
+    await instance.adapter.interruptTurn("t-codex-steer-image");
+    await recorder.until((e) => e.type === "turn.completed");
+  }, 20_000);
+
   it("reports an explicitly refused steer as refused so the caller queues, and keeps the child alive", async () => {
     const dump = join(scratch, "codex-steer-refused.json");
     process.env.FAKE_CODEX_DUMP = dump;

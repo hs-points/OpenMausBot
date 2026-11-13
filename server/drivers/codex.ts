@@ -40,6 +40,7 @@ import type {
   StdioMcpSpec,
   SteerOutcome,
   TextGenerationOptions,
+  TurnImageInput,
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { codexSelectedProviderArgs, decodeCodexSelection, OFFICIAL_CODEX_PROVIDER, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
@@ -273,7 +274,7 @@ function codexNativeLogMessage(message: unknown): unknown {
   if (record.method === "thread/inject_items") {
     return { ...record, params: { ...params, items: "[developer instruction update omitted]" } };
   }
-  return record.method === "turn/start" ? withoutInlineImages(message) : message;
+  return record.method === "turn/start" || record.method === "turn/steer" ? withoutInlineImages(message) : message;
 }
 
 /** A response arriving after its request timed out is still sanitized, never a secret-bearing orphan. */
@@ -435,7 +436,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     const listeners = new Set<RuntimeEventListener>();
     interface Turn {
       stop: () => Promise<boolean>;
-      steer?: (text: string) => Promise<SteerOutcome>;
+      steer?: (text: string, images?: readonly TurnImageInput[]) => Promise<SteerOutcome>;
       turnId: string;
       asks: Map<string, CodexAsk>;
       pid?: number;
@@ -808,14 +809,16 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         else await settle(false, "interrupted");
       };
 
-      const steerActiveTurn = async (text: string): Promise<SteerOutcome> => {
+      const steerActiveTurn = async (text: string, images?: readonly TurnImageInput[]): Promise<SteerOutcome> => {
         if (state.settled || abandoned || stopRequested || !codexThreadId || !codexTurnId) return "refused";
         if (child.exitCode !== null || child.signalCode !== null) return "refused";
         try {
           const steerTimeoutMs = Math.max(1, Number(process.env.FAKE_CODEX_STEER_TIMEOUT_MS ?? 10_000) || 10_000);
+          // turn/steer takes the same UserInput items as turn/start; an image that cannot be read refuses the whole steer.
+          const input = [{ type: "text" as const, text }, ...await codexImageInputs(images)];
           await request("turn/steer", {
             threadId: codexThreadId,
-            input: [{ type: "text", text }],
+            input,
             expectedTurnId: codexTurnId,
           }, steerTimeoutMs);
           return "steered";
@@ -1676,6 +1679,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         dataMcp: true, emailMcp: true, deviceMcp: true,
         images: true,
         nativeImageInput: true,
+        steerImages: true,
         effortLevels: ["low", "medium", "high", "xhigh", "max"],
         strictResume: true,
       },
@@ -1683,9 +1687,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       interruptTurn: async (threadId) => {
         await active.get(threadId)?.stop();
       },
-      steer: async (threadId, text) => {
+      steer: async (threadId, text, images) => {
         const turn = active.get(threadId);
-        return turn?.steer ? await turn.steer(text) : "refused";
+        return turn?.steer ? await turn.steer(text, images) : "refused";
       },
       respondToRequest: async (threadId, requestId, decision) => {
         const turn = active.get(threadId);
