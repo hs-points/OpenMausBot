@@ -1,0 +1,40 @@
+# Slack app manifest for Kabir (HSP). Create at https://api.slack.com/apps → Create New App → From a manifest.
+# After install: Basic Information → App-Level Tokens → Generate (scope connections:write) = the xapp- token;
+# OAuth & Permissions → Bot User OAuth Token = the xoxb- token. Upload the avatar under Display Information.
+display_information:
+  name: Kabir
+  description: Kabir, HSP's assistant. DM me or @mention me in a thread.
+  background_color: "#1f2933"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Kabir
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:read
+      - chat:write
+      - im:history
+      - im:read
+      - im:write
+      - users:read
+      - users:read.email
+      - files:read
+      - files:write
+      - groups:read
+      - reactions:write
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.im
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

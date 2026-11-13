@@ -10,6 +10,8 @@ import { OverviewSection } from "./bot-settings/OverviewSection";
 import { IdentitySection } from "./bot-settings/IdentitySection";
 import { SlackSection } from "./bot-settings/SlackSection";
 import { useSlackManagementUrl } from "./bot-settings/useSlackManagement";
+import { useHspSlack } from "@/lib/hsp-slack";
+import { SlackRows } from "./HspSlackSettings";
 import { SoulSection } from "./bot-settings/SoulSection";
 import { SkillsSection } from "./bot-settings/SkillsSection";
 import { MemorySection } from "./bot-settings/MemorySection";
@@ -58,9 +60,11 @@ export function BotSettingsDialog({ bot, overlay = false }: {
   const linkedSection = !collapsed && !state.botSettingsExpandRemembered ? section : null;
   const slackUrl = useSlackManagementUrl(bot.id);
   const ownerOrAdmin = useOwnerOrAdmin();
+  const bridge = useHspSlack(ownerOrAdmin === true);
+  const slackEntry = bridge.status === "ready" ? bridge.data.bots.find((entry) => entry.botId === bot.id) : undefined;
   const teamName = useTeamName();
   const sections = BOT_SECTIONS
-    .filter((entry) => entry.id !== "slack" || slackUrl !== null)
+    .filter((entry) => entry.id !== "slack" || slackUrl !== null || slackEntry !== undefined)
     .filter((entry) => entry.id !== "visibility" || (!window.ogb && ownerOrAdmin === true && !teamName));
   const visibleSections = sections.filter((entry) => sectionMatches(entry, q));
 
@@ -75,7 +79,7 @@ export function BotSettingsDialog({ bot, overlay = false }: {
     if (q) { setQuery(""); return; }
     dialogRef.current?.querySelector(`[data-bot-settings-section="${section}"]`)
       ?.scrollIntoView({ block: "nearest" });
-  }, [collapsed, section, q]);
+  }, [collapsed, section, q, sections.length]);
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -131,7 +135,7 @@ export function BotSettingsDialog({ bot, overlay = false }: {
       case "soul":
         return <SoulSection bot={bot} patch={derived.patch} />;
       case "slack":
-        return slackUrl ? <SlackSection managementUrl={slackUrl} /> : null;
+        return slackUrl ? <SlackSection managementUrl={slackUrl} /> : slackEntry ? <SlackRows entries={[slackEntry]} /> : null;
       case "skills":
         return <SkillsSection bot={bot} />;
       case "memory":

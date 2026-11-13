@@ -49,6 +49,7 @@ export const SERVICE_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Re
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/messages\/guarded$/ },
   { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/requests\/[\w-]+$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/requests\/[\w-]+\/interrupt$/ },
+  { methods: ["GET"], path: /^\/api\/hsp\/slack\/people$/ }, // HSP patch: the Slack bridge asks who may use each bot
   { methods: ["DELETE"], path: /^\/api\/bots\/[\w-]+\/queue\/[\w-]+$/ },
   { methods: ["POST"], path: /^\/api\/threads\/[\w-]+\/respond$/ }, // decline only: see the handler
   { methods: ["GET", "POST", "PUT", "PATCH", "DELETE"], path: /^\/api\/internal\// }, // capability bearer checked in the handler
@@ -327,6 +328,7 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/helper-followup$/ }, // MausBot's own person only: see mayFollowUp
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/interrupt$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/read$/ },
+  { methods: ["GET"], path: /^\/api\/hsp\/slack\/people$/ }, // HSP patch: the Slack bridge asks who may use each bot
   { methods: ["DELETE"], path: /^\/api\/bots\/[\w-]+\/queue\/[\w-]+$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/queue\/[\w-]+\/steer$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/tasks$/ },

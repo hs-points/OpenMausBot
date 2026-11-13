@@ -12,6 +12,7 @@ const TOKEN = "r".repeat(43);
 const SEND = "/api/bots/milo/messages/guarded";
 const FOLLOW = "/api/bots/milo/requests/abcdefghijklmnop";
 const STOP = "/api/bots/milo/requests/abcdefghijklmnop/interrupt";
+const PEOPLE = "/api/hsp/slack/people";
 
 function request(headers: Record<string, string>, method: string): IncomingMessage {
   // SAFETY: the resolver reads only headers and method
@@ -36,6 +37,9 @@ describe("hsp relay token", () => {
     expect(isRelayRoute("POST", SEND)).toBe(true);
     expect(isRelayRoute("get", FOLLOW)).toBe(true);
     expect(isRelayRoute("POST", STOP)).toBe(true);
+    expect(isRelayRoute("GET", PEOPLE)).toBe(true);
+    expect(isRelayRoute("POST", PEOPLE)).toBe(false);
+    expect(isRelayRoute("GET", "/api/hsp/slack")).toBe(false);
     expect(isRelayRoute("GET", SEND)).toBe(false);
     expect(isRelayRoute("POST", "/api/bots/milo/tasks")).toBe(false);
     expect(isRelayRoute("GET", "/api/health")).toBe(false);
@@ -51,13 +55,14 @@ describe("hsp relay token", () => {
     const file = join(dir, "relay.token");
     writeFileSync(file, `${TOKEN}\n`);
     setRelayTokenForTests(loadRelayToken({ OMB_RELAY_TOKEN_FILE: file }));
-    for (const [method, path] of [["POST", SEND], ["GET", FOLLOW], ["POST", STOP]] as const) {
+    for (const [method, path] of [["POST", SEND], ["GET", FOLLOW], ["POST", STOP], ["GET", PEOPLE]] as const) {
       expect(check(method, path).auth, `${method} ${path} no token`).toBeNull();
       expect(check(method, path).error).toBe(RELAY_TOKEN_REFUSAL);
       expect(check(method, path, { "x-omb-relay-token": "x".repeat(43) }).auth, "wrong token").toBeNull();
       expect(check(method, path, { "x-omb-relay-token": TOKEN.slice(1) }).auth, "short token").toBeNull();
       expect(check(method, path, { "x-omb-relay-token": TOKEN }).auth).toEqual({ kind: "loopback", scopes: ["client"], trust: "service" });
     }
+    expect(check("GET", "/api/hsp/slack").auth, "admin route is not service-reachable").toBeNull();
     expect(check("GET", "/api/health").auth?.kind).toBe("loopback");
     expect(check("POST", "/api/bots/milo/tasks").auth?.kind).toBe("loopback");
   });

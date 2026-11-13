@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Archive, ChartNoAxesColumn, Cloud, CloudDownload, Coins, Download, FlaskConical, KeyRound, LockKeyhole, Monitor, Palette, ScrollText, Search, Settings, Sparkles, TabletSmartphone, Terminal, User, Users, X, Building2, Zap, BookOpen, ImagePlus } from "lucide-react";
+import { Archive, ChartNoAxesColumn, Cloud, CloudDownload, Coins, Download, FlaskConical, KeyRound, LockKeyhole, Monitor, Palette, ScrollText, Search, Settings, Slack, Sparkles, TabletSmartphone, Terminal, User, Users, X, Building2, Zap, BookOpen, ImagePlus } from "lucide-react";
 import { useStore, type AppSettingsSection } from "@/state/store";
 import { skillsLibraryEnabled } from "@/lib/feature-flags";
 import { type LocaleKey } from "@/locales";
@@ -63,6 +63,8 @@ import { scrollWithin } from "@/lib/scroll-within";
 import { glassPopupFrameStyle } from "@/lib/glass-popup";
 import { NotificationRows } from "./NotificationSettingsRows";
 import { useAdvancedMode } from "@/lib/interface-mode";
+import { useHspSlack, SLACK_REFRESH_MS } from "@/lib/hsp-slack";
+import { HspSlackSettings } from "./HspSlackSettings";
 import { Select } from "./Select";
 import { SavedStepsRow } from "./SavedStepsRow";
 import { BrowserProfilesRow, ColorUserBubblesRow, AdvancedModeRow, ExperimentalFeaturesRow, LanguageRow, NewBotEffortRow, PinnedCirclesRow, ReplayTourRow, RunCardRow, FollowUpRow, SendKeyRow, ShowThreadsRow, ToolCallsRow, UniversalPinsRow, UpdatesRow } from "./AppSettingsRows";
@@ -106,6 +108,7 @@ export const SECTIONS: Array<{
   { id: "people", group: "account", labelKey: "settings.section.people", icon: Users, keywords: ["people", "users", "invite", "sign in", "members", "admins", "access"] },
   { id: "botAccess", group: "account", labelKey: "settings.section.botAccess", icon: Users, keywords: ["access", "share", "sharing", "who can", "view", "chat", "edit", "permissions", "team", "members", "bots"] },
   { id: "activity", group: "account", labelKey: "settings.section.activity", icon: ScrollText, keywords: ["activity", "audit", "log", "history", "who changed", "approvals", "decisions", "admin"] },
+  { id: "slack", group: "account", labelKey: "settings.section.slack", icon: Slack, keywords: ["slack", "bridge", "messages", "direct messages", "channels", "bots"] },
   { id: "workspaces", group: "account", labelKey: "settings.section.workspaces", icon: Building2, keywords: ["clients", "tenants", "fleet", "workspaces", "installation", "installations"] },
   { id: "experimental", group: "account", labelKey: "settings.section.experimental", icon: FlaskConical, keywords: ["early", "preview", "learn", "skill", "authoring"] },
 ];
@@ -122,6 +125,7 @@ export const SIMPLE_PAGES: SimpleSettingsPage[] = [
   { id: "general", labelKey: "settings.section.general", icon: Settings, sections: ["general", "appearance", "people", "import", "organization", "activity"],
     keywords: ["account", "theme", "looks", "open at login", "startup", "analytics", "advanced mode"] },
   { id: "botAccess", labelKey: "settings.section.botAccess", icon: Users, sections: ["botAccess"] },
+  { id: "slack", labelKey: "settings.section.slack", icon: Slack, sections: ["slack"] },
   { id: "ai", labelKey: "settings.group.ai", icon: Sparkles, sections: ["engines", "connections"] },
   { id: "computer", labelKey: "settings.simple.page.computer", icon: Monitor, sections: ["companion", "desktopWorkspaces", "computer", "logins"] },
   { id: "billing", labelKey: "settings.simple.page.billing", icon: ChartNoAxesColumn, sections: ["usage", "cloudAccount"], keywords: ["billing", "included", "allowance", "cloud hours", "voice"] },
@@ -195,6 +199,8 @@ export function SettingsModal() {
   useEffect(() => window.ogb?.onOpenAppSettings?.(() => setQuery("")), []);
   const q = query.trim().toLowerCase();
   const ownerOrAdmin = useOwnerOrAdmin();
+  const slack = useHspSlack(ownerOrAdmin === true, section === "slack" ? SLACK_REFRESH_MS : 0);
+  const slackListed = slack.status === "ready" || (requested === "slack" && ownerOrAdmin !== false && slack.status === "loading");
   const baseSections = SECTIONS.filter((entry) => !remoteActive || entry.id === "companion" || entry.id === "appearance" || entry.id === "desktopWorkspaces")
     .filter((entry) => entry.id !== "desktopWorkspaces" || Boolean(window.ogb?.environments))
     .filter((entry) => entry.id !== "organization" || Boolean(window.ogb?.organization))
@@ -202,6 +208,7 @@ export function SettingsModal() {
     .filter((entry) => entry.id !== "workspaces" || workspacesAvailable(state.config))
     .filter((entry) => entry.id !== "people" || (!window.ogb && state.config?.cloudHome !== true))
     .filter((entry) => entry.id !== "activity" || (!window.ogb && ownerOrAdmin === true))
+    .filter((entry) => entry.id !== "slack" || slackListed)
     .filter((entry) => entry.id !== "botAccess" || (Boolean(state.config?.team) && ownerOrAdmin === true));
   const availableSections = baseSections.filter((entry) => entry.id !== "skills" || skillsLibraryEnabled(state.config));
   const visibleSections = availableSections.filter((entry) => sectionMatches(entry, q));
@@ -424,6 +431,8 @@ export function SettingsModal() {
         return <ActivitySection />;
       case "botAccess":
         return <AccessOverview />;
+      case "slack":
+        return slack.status === "ready" ? <HspSlackSettings data={slack.data} /> : null;
       case "workspaces":
         return <WorkspacesSection />;
       default:

@@ -1,0 +1,14 @@
+{
+  "name": "hsp-slack-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Slack Socket Mode bridge: one Slack app per OpenMausBot bot, relayed through the guarded loopback routes.",
+  "main": "bridge.mjs",
+  "engines": { "node": ">=24" },
+  "scripts": { "start": "node bridge.mjs", "test": "node --test test/" },
+  "dependencies": {
+    "@slack/socket-mode": "3.1.0",
+    "@slack/web-api": "8.2.0"
+  }
+}

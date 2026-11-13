@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, Loader2, Menu } from "lucide-react";
+import { useSlackDeepLink } from "@/lib/hsp-slack";
 import { CLOUD_LINK_SETTINGS, openBot, StoreProvider, useStore } from "@/state/store";
 import { nextShortcutBot, shortcutBots, shownBotIds } from "@/lib/sidebar-shortcut-order";
 import { useShowThreads } from "@/lib/thread-preferences";
@@ -82,6 +83,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const inboxShown = useInboxPanel().open && inboxReady;
   // A Switch AI pick lands once its stopped turn's chat is idle, wherever the person is by then.
   useAiSwitchKeeper({ bots: state.bots, dispatch });
+  useSlackDeepLink(dispatch, state.bots);
   const showThreads = useShowThreads();
   const { capabilities } = useDesktopCapabilities();
   const captionChrome = useCaptionChrome();

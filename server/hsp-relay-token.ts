@@ -7,11 +7,12 @@ import { timingSafeEqual } from "node:crypto";
 
 export const RELAY_TOKEN_HEADER = "x-omb-relay-token";
 
-/** The guarded send, following one request, and stopping it. */
+/** The guarded send, following one request, stopping it, and the bridge's read of who may use each bot. */
 const RELAY_ROUTES: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "POST", path: /^\/api\/bots\/[\w-]+\/messages\/guarded$/ },
   { method: "GET", path: /^\/api\/bots\/[\w-]+\/requests\/[\w-]+$/ },
   { method: "POST", path: /^\/api\/bots\/[\w-]+\/requests\/[\w-]+\/interrupt$/ },
+  { method: "GET", path: /^\/api\/hsp\/slack\/people$/ },
 ];
 
 export const RELAY_TOKEN_REFUSAL = "forbidden: this local request needs the relay token";

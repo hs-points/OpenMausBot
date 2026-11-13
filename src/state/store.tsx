@@ -524,7 +524,7 @@ export type AppSettingsSection =
   | "computer"
   | "logins"
   | "usage"
-  | "people" | "botAccess"
+  | "people" | "botAccess" | "slack"
   | "activity"
   | "backups"
   | "workspaces"

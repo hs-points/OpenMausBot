@@ -21,6 +21,7 @@ const fixture = vi.hoisted(() => ({
   switches: [] as ComponentProps<typeof Switch>[],
   ownerOrAdmin: null as boolean | null,
   config: {} as Record<string, unknown>,
+  slack: { status: "hidden" } as import("@/lib/hsp-slack").HspSlackState,
 }));
 vi.mock("./DesktopCapabilities", () => ({ useDesktopCapabilities: () => ({ capabilities: {} }) }));
 
@@ -73,6 +74,7 @@ beforeEach(() => {
   fixture.switches = [];
   fixture.ownerOrAdmin = null;
   fixture.config = {};
+  fixture.slack = { status: "hidden" };
   vi.stubGlobal("window", {});
   vi.stubGlobal("document", { documentElement: { dataset: {} } });
   setLocale("en");
@@ -83,6 +85,10 @@ afterEach(() => {
   setLocale("en");
 });
 
+vi.mock("@/lib/hsp-slack", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/hsp-slack")>(),
+  useHspSlack: (enabled: boolean) => (enabled ? fixture.slack : { status: "hidden" }),
+}));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => fixture.ownerOrAdmin }));
 
 const render = () => renderToStaticMarkup(createElement(SettingsModal));
@@ -102,7 +108,7 @@ describe("Settings rail groups", () => {
     expect(SETTINGS_GROUPS.map((group) => group.id)).toEqual(["you", "ai", "computers", "account"]);
     const ids = SECTIONS.map((entry) => entry.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(21); // 16 + the shared Skills library (AI group) + Image generation (AI) + Logins (Devices) + Import and a team's Bot access (Account)
+    expect(ids).toHaveLength(22); // 16 + the shared Skills library (AI group) + Image generation (AI) + Logins (Devices) + Import and a team's Bot access (Account)
     for (const entry of SECTIONS) expect(SETTINGS_GROUPS.map((group) => group.id)).toContain(entry.group);
   });
 
@@ -137,6 +143,21 @@ describe("Settings rail groups", () => {
     fixture.config = {};
     fixture.ownerOrAdmin = true;
     expect(Object.values(rail(render())).flat()).not.toContain("botAccess");
+  });
+
+  it("lists Slack only for an admin when the bridge says it is configured", () => {
+    fixture.slack = { status: "ready", data: { bridge: null, bots: [] } };
+    fixture.ownerOrAdmin = true;
+    expect(rail(render()).account).toContain("slack");
+    fixture.ownerOrAdmin = false;
+    expect(Object.values(rail(render())).flat()).not.toContain("slack");
+    fixture.ownerOrAdmin = true;
+    fixture.slack = { status: "hidden" };
+    expect(Object.values(rail(render())).flat()).not.toContain("slack");
+    fixture.slack = { status: "loading" };
+    expect(Object.values(rail(render())).flat()).not.toContain("slack");
+    fixture.section = "slack";
+    expect(rail(render()).account).toContain("slack");
   });
 
   it("shows a paired remote client only Appearance, Remote access and Servers", () => {
