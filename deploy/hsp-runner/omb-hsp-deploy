@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# omb-hsp-deploy: the only thing the GitHub Actions runner may run as root.
+#
+# Installed root-owned at /usr/local/sbin/omb-hsp-deploy (mode 0755) and
+# allowed by /etc/sudoers.d/omb-hsp-deploy. The runner can change the workflow
+# and the repo, but not this file or its config, so everything that touches
+# systemd is decided here and every argument is checked against a strict
+# pattern. Changing this script on the server means copying it again by hand
+# (see deploy/hsp-runner/README.md).
+#
+#   omb-hsp-deploy current                    print the live hspNN folder
+#   omb-hsp-deploy next                       print the next free hspNN name
+#   omb-hsp-deploy install <hspNN> <version>  npm install openmausbot@<version> into a NEW folder, as the service user
+#   omb-hsp-deploy swap <hspNN>               back up team.conf, point it at <hspNN>, daemon-reload, restart
+#   omb-hsp-deploy rollback <backup-name>     restore team.conf from that backup, daemon-reload, restart
+#   omb-hsp-deploy checks <hspNN> <version>   run the root-owned scripts in checks.d (box self-check, cua, ...)
+set -euo pipefail
+umask 022
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+CONFIG_DIR=/etc/omb-hsp-deploy
+CONFIG="$CONFIG_DIR/deploy.env"
+
+die() { echo "omb-hsp-deploy: $*" >&2; exit 1; }
+
+# Refuse config (and checks) that anyone but root could have written.
+root_only() {
+  local path=$1 owner mode
+  [ -e "$path" ] || die "$path is missing"
+  [ ! -L "$path" ] || die "$path is a symlink"
+  owner=$(stat -c %u "$path"); mode=$(stat -c %a "$path")
+  [ "$owner" = 0 ] || die "$path must be owned by root"
+  (( (8#$mode & 8#022) == 0 )) || die "$path must not be group- or world-writable (mode $mode)"
+}
+
+[ "$(id -u)" = 0 ] || die "run through sudo"
+root_only "$CONFIG_DIR"
+root_only "$CONFIG"
+# shellcheck source=deploy.env.example
+. "$CONFIG"
+
+: "${SERVICE:?SERVICE missing from $CONFIG}"
+: "${BASE_DIR:?BASE_DIR missing from $CONFIG}"
+: "${SERVICE_USER:?SERVICE_USER missing from $CONFIG}"
+: "${NPM_BIN:?NPM_BIN missing from $CONFIG}"
+PACKAGE=${PACKAGE:-openmausbot}
+CHECK_TIMEOUT=${CHECK_TIMEOUT:-180}
+DROPIN_DIR="/etc/systemd/system/$SERVICE.service.d"
+CONF="$DROPIN_DIR/team.conf"
+
+[[ "$SERVICE" =~ ^[A-Za-z0-9_.@-]+$ ]] || die "bad SERVICE"
+[[ "$BASE_DIR" =~ ^/[A-Za-z0-9_./-]+$ && "$BASE_DIR" != */ ]] || die "bad BASE_DIR"
+[[ "$PACKAGE" =~ ^[a-z0-9@/._-]+$ ]] || die "bad PACKAGE"
+
+folder_arg() { [[ "${1:-}" =~ ^hsp[0-9]{1,4}$ ]] || die "folder must look like hsp18, got '${1:-}'"; }
+version_arg() { [[ "${1:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || die "version must look like 0.1.154, got '${1:-}'"; }
+
+installed_version() {
+  local pkg="$BASE_DIR/$1/node_modules/$PACKAGE/package.json"
+  [ -f "$pkg" ] || return 1
+  sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' "$pkg" | head -1
+}
+
+current() {
+  local found
+  found=$(grep -oE "$BASE_DIR/hsp[0-9]+" "$CONF" | sed "s#^$BASE_DIR/##" | sort -u || true)
+  [ -n "$found" ] || die "no $BASE_DIR/hspNN path in $CONF"
+  [ "$(printf '%s\n' "$found" | wc -l)" = 1 ] || die "$CONF names more than one hspNN folder: $(echo $found)"
+  printf '%s\n' "$found"
+}
+
+restart() {
+  systemctl daemon-reload
+  systemctl restart "$SERVICE"
+}
+
+# Every change to team.conf and the service goes through one lock, so two
+# runs (or a run and a hand deploy using this script) never interleave.
+exec 9>/run/omb-hsp-deploy.lock
+flock -w 600 9 || die "another deploy holds /run/omb-hsp-deploy.lock"
+
+cmd=${1:-}; shift || true
+case "$cmd" in
+  current)
+    [ $# = 0 ] || die "usage: current"
+    current
+    ;;
+
+  next)
+    [ $# = 0 ] || die "usage: next"
+    max=0
+    for d in "$BASE_DIR"/hsp[0-9]*; do
+      [ -d "$d" ] || continue
+      n=${d##*/hsp}; [[ "$n" =~ ^[0-9]+$ ]] || continue
+      (( 10#$n > max )) && max=$((10#$n))
+    done
+    echo "hsp$((max + 1))"
+    ;;
+
+  install)
+    [ $# = 2 ] || die "usage: install <hspNN> <version>"
+    folder_arg "$1"; version_arg "$2"
+    dir="$BASE_DIR/$1"
+    [ ! -e "$dir" ] || die "$dir already exists; deploy it without a version, or pick a new folder"
+    install -d -o "$SERVICE_USER" -g "$(id -gn "$SERVICE_USER")" -m 0755 "$dir"
+    echo "installing $PACKAGE@$2 into $dir as $SERVICE_USER"
+    if ! runuser -u "$SERVICE_USER" -- env HOME="$dir" npm_config_cache="$dir/.npm-cache" \
+        "$NPM_BIN" install --prefix "$dir" --omit=dev --no-audit --no-fund --no-update-notifier "$PACKAGE@$2"; then
+      mv "$dir" "$dir.failed-$(date +%Y%m%d-%H%M%S)"
+      die "npm install failed; the half-built folder was moved aside"
+    fi
+    rm -rf "$dir/.npm-cache"
+    got=$(installed_version "$1") || die "$dir has no node_modules/$PACKAGE after install"
+    [ "$got" = "$2" ] || die "asked for $2 but $dir has $got"
+    echo "installed $PACKAGE $got in $dir"
+    ;;
+
+  swap)
+    [ $# = 1 ] || die "usage: swap <hspNN>"
+    folder_arg "$1"
+    new=$1; old=$(current)
+    [ "$new" != "$old" ] || die "$new is already live"
+    [ -d "$BASE_DIR/$new" ] || die "$BASE_DIR/$new does not exist"
+    tmp=$(mktemp "$DROPIN_DIR/.team.conf.XXXXXX")
+    trap 'rm -f "$tmp"' EXIT
+    sed "s#$BASE_DIR/$old\([/\"' ]\|\$\)#$BASE_DIR/$new\1#g" "$CONF" > "$tmp"
+    grep -q "$BASE_DIR/$old\([/\"' ]\|\$\)" "$tmp" && die "could not replace every $old path in $CONF"
+    # Every path the new drop-in names under the new folder must exist, so a
+    # different layout fails here and not as a crash loop after the restart.
+    while read -r path; do
+      [ -e "$path" ] || die "new team.conf would point at $path, which does not exist"
+    done < <(grep -oE "$BASE_DIR/$new/[^ \"'=]*" "$tmp" | sort -u)
+    backup="team.conf.bak-$old-pre-$new-$(date +%Y%m%d-%H%M%S)"
+    cp -p "$CONF" "$DROPIN_DIR/$backup"
+    chmod --reference="$CONF" "$tmp"; chown --reference="$CONF" "$tmp"
+    mv -f "$tmp" "$CONF"
+    trap - EXIT
+    echo "team.conf: $old -> $new (backup $DROPIN_DIR/$backup)"
+    diff -u "$DROPIN_DIR/$backup" "$CONF" || true
+    # Printed before the restart, so the workflow can roll back even when the
+    # restart itself fails.
+    echo "BACKUP=$backup"
+    restart
+    ;;
+
+  rollback)
+    [ $# = 1 ] || die "usage: rollback <backup-name>"
+    [[ "$1" =~ ^team\.conf\.bak-[A-Za-z0-9._-]+$ ]] || die "backup must be a team.conf.bak-* name in $DROPIN_DIR"
+    src="$DROPIN_DIR/$1"
+    [ -f "$src" ] && [ ! -L "$src" ] || die "$src is missing"
+    tmp=$(mktemp "$DROPIN_DIR/.team.conf.XXXXXX")
+    trap 'rm -f "$tmp"' EXIT
+    cp -p "$src" "$tmp"
+    mv -f "$tmp" "$CONF"
+    trap - EXIT
+    echo "team.conf restored from $1 ($(current) is live again)"
+    restart
+    ;;
+
+  checks)
+    [ $# = 2 ] || die "usage: checks <hspNN> <version>"
+    folder_arg "$1"; version_arg "$2"
+    shopt -s nullglob
+    [ ! -e "$CONFIG_DIR/checks.d" ] || root_only "$CONFIG_DIR/checks.d"
+    failed=0; ran=0
+    for check in "$CONFIG_DIR"/checks.d/*; do
+      [ -f "$check" ] && [ -x "$check" ] || continue
+      root_only "$check"
+      ran=$((ran + 1))
+      echo "::group::check ${check##*/}"
+      if timeout "$CHECK_TIMEOUT" env -i PATH="$PATH" SERVICE="$SERVICE" HSP_DIR="$BASE_DIR/$1" \
+          HSP_FOLDER="$1" EXPECTED_VERSION="$2" PORT="${PORT:-}" "$check"; then
+        echo "::endgroup::"; echo "PASS ${check##*/}"
+      else
+        echo "::endgroup::"; echo "FAIL ${check##*/}"; failed=1
+      fi
+    done
+    echo "$ran server check(s) ran"
+    exit "$failed"
+    ;;
+
+  *)
+    die "usage: current | next | install <hspNN> <version> | swap <hspNN> | rollback <backup-name> | checks <hspNN> <version>"
+    ;;
+esac

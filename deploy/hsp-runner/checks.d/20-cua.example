@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Ada's computer-use checks: version, status, health_report and get_desktop_state.
+# Copy to /etc/omb-hsp-deploy/checks.d/20-cua (owner root, mode 0755) and drop the
+# .example suffix. Exit 0 = pass. Environment: SERVICE, HSP_DIR, HSP_FOLDER,
+# EXPECTED_VERSION, PORT.
+#
+# Same commands as the hand-run checks.sh: docker over ssh to kvm8-cpc, exec
+# cua-driver as the cua user in Ada's container. All four are read-only (no input
+# tools). They run as omb-hsp with its own HOME so its ~/.ssh/config, keys and
+# known_hosts (the ones the live service uses to reach kvm8-cpc) apply.
+# `cua-driver --version` reports the cua-driver version (0.37.0 on 2026-11-12),
+# not openmausbot's, so it is not compared with EXPECTED_VERSION; set
+# CUA_EXPECTED_VERSION to pin it.
+set -euo pipefail
+PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+CONTAINER=${CUA_CONTAINER:-openmausbot-vps-e0f8e295249a-cb93e9e35345}   # Ada
+HOST=${CUA_DOCKER_HOST:-ssh://kvm8-cpc}
+EXE=${CUA_EXE:-cua-driver}
+SOCK=/run/user/1000/openmausbot-cua.sock
+RUN_AS=omb-hsp
+RUN_HOME=/var/lib/openmausbot/hsp
+
+d() {
+  timeout 40 runuser -u "$RUN_AS" -- env -i HOME="$RUN_HOME" PATH="$PATH" \
+    docker -H "$HOST" exec -u cua -e HOME=/home/cua -e DISPLAY=:1 \
+      -e CUA_DRIVER_INSTALL_CHANNEL=python_package -e CUA_DRIVER_RS_TELEMETRY_ENABLED=0 \
+      "$CONTAINER" "$EXE" "$@" 2>&1
+}
+
+fail=0
+check() {
+  local name=$1; shift
+  local out rc=0
+  out=$(d "$@") || rc=$?
+  echo "## $name (exit $rc)"
+  printf '%s\n' "$out" | head -c 1500; echo
+  if [ "$rc" -ne 0 ]; then echo "cua $name: FAIL (exit $rc)"; fail=1; return 0; fi
+  if printf '%s' "$out" | grep -Eq '"isError"[[:space:]]*:[[:space:]]*true'; then
+    echo "cua $name: FAIL (tool returned isError)"; fail=1; return 0
+  fi
+  if [ "$name" = version ] && [ -n "${CUA_EXPECTED_VERSION:-}" ] \
+      && ! printf '%s' "$out" | grep -Fq "$CUA_EXPECTED_VERSION"; then
+    echo "cua version: FAIL (expected $CUA_EXPECTED_VERSION)"; fail=1; return 0
+  fi
+  echo "cua $name: ok"
+}
+
+check version --version
+check status status --socket "$SOCK"
+check health_report call health_report '{}' --socket "$SOCK"
+check get_desktop_state call get_desktop_state '{}' --socket "$SOCK"
+exit "$fail"

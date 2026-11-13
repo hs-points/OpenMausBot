@@ -1,0 +1,10 @@
+# /etc/sudoers.d/omb-hsp-deploy   (owner root, mode 0440; check with: visudo -cf <file>)
+# The GitHub Actions runner user may run the deploy helper's six subcommands
+# as root, and nothing else. The helper checks every argument itself.
+Defaults:omb-runner !requiretty, env_reset
+omb-runner ALL=(root) NOPASSWD: /usr/local/sbin/omb-hsp-deploy current, \
+                                /usr/local/sbin/omb-hsp-deploy next, \
+                                /usr/local/sbin/omb-hsp-deploy install hsp* *, \
+                                /usr/local/sbin/omb-hsp-deploy swap hsp*, \
+                                /usr/local/sbin/omb-hsp-deploy rollback team.conf.bak-*, \
+                                /usr/local/sbin/omb-hsp-deploy checks hsp* *

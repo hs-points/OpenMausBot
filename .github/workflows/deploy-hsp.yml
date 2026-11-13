@@ -1,0 +1,145 @@
+name: Deploy to hsp server
+
+# Deploys an openmausbot release to the hsp server through the self-hosted
+# runner on that server: install it into a new /opt/hsp-openmausbot/hspNN
+# folder (or take one that already exists), swap it into team.conf with a
+# backup, restart, health-check, and roll back automatically if any check
+# fails. Server setup: deploy/hsp-runner/README.md.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "openmausbot version from npm, e.g. 0.1.155. Empty: deploy an existing folder as it is."
+        required: false
+        type: string
+      folder:
+        description: "hspNN folder, e.g. hsp18. Empty: the next free number (only with a version)."
+        required: false
+        type: string
+  # Pushing a tag hsp-deploy-v0.1.155 installs 0.1.155 into the next folder and deploys it.
+  push:
+    tags: ["hsp-deploy-v*"]
+
+permissions:
+  contents: read
+
+# One deploy at a time, and never cancel one halfway through a swap.
+concurrency:
+  group: deploy-hsp
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy ${{ inputs.folder || github.ref_name }}
+    runs-on: [self-hosted, omb-hsp]
+    # Add required reviewers to this environment in the repo settings to make
+    # every deploy wait for an approval click.
+    environment: hsp-server
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: deploy/hsp-runner
+          persist-credentials: false
+
+      - name: Decide what to deploy
+        id: plan
+        env:
+          IN_VERSION: ${{ inputs.version }}
+          IN_FOLDER: ${{ inputs.folder }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=$IN_VERSION; folder=$IN_FOLDER
+          if [ "$REF_TYPE" = tag ]; then version=${REF_NAME#hsp-deploy-v}; folder=; fi
+          if [ -n "$version" ] && ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::version '$version' does not look like 0.1.155"; exit 1
+          fi
+          if [ -n "$folder" ] && ! [[ "$folder" =~ ^hsp[0-9]{1,4}$ ]]; then
+            echo "::error::folder '$folder' does not look like hsp18"; exit 1
+          fi
+          . /etc/omb-hsp-deploy/deploy.env
+          old=$(sudo -n /usr/local/sbin/omb-hsp-deploy current)
+          [ -n "$folder" ] || { [ -n "$version" ] || { echo "::error::give a version, a folder, or both"; exit 1; }; folder=$(sudo -n /usr/local/sbin/omb-hsp-deploy next); }
+          [ "$folder" != "$old" ] || { echo "::error::$folder is already live"; exit 1; }
+          pkg="$BASE_DIR/$folder/node_modules/${PACKAGE:-openmausbot}/package.json"
+          if [ -d "$BASE_DIR/$folder" ]; then
+            have=$(sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' "$pkg" 2>/dev/null | head -1)
+            [ -n "$have" ] || { echo "::error::$BASE_DIR/$folder exists but has no installed package"; exit 1; }
+            if [ -n "$version" ] && [ "$have" != "$version" ]; then
+              echo "::error::$folder already holds $have, not $version"; exit 1
+            fi
+            version=$have; install=false
+          else
+            [ -n "$version" ] || { echo "::error::$BASE_DIR/$folder does not exist; give a version to install"; exit 1; }
+            install=true
+          fi
+          echo "old=$old" >> "$GITHUB_OUTPUT"
+          echo "folder=$folder" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "install=$install" >> "$GITHUB_OUTPUT"
+          echo "Deploying $folder ($version) over $old; install new folder: $install"
+
+      - name: Install ${{ steps.plan.outputs.version }} into ${{ steps.plan.outputs.folder }}
+        if: steps.plan.outputs.install == 'true'
+        env:
+          FOLDER: ${{ steps.plan.outputs.folder }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: sudo -n /usr/local/sbin/omb-hsp-deploy install "$FOLDER" "$VERSION"
+
+      - name: Swap ${{ steps.plan.outputs.old }} -> ${{ steps.plan.outputs.folder }} and restart
+        id: swap
+        env:
+          FOLDER: ${{ steps.plan.outputs.folder }}
+        run: |
+          status=0
+          sudo -n /usr/local/sbin/omb-hsp-deploy swap "$FOLDER" 2>&1 | tee swap.log || status=$?
+          # The helper prints the backup name before it restarts, so a failed
+          # restart still leaves us something to roll back to.
+          backup=$(sed -n 's/^BACKUP=//p' swap.log | tail -1)
+          echo "backup=$backup" >> "$GITHUB_OUTPUT"
+          exit $status
+
+      - name: Health check
+        env:
+          FOLDER: ${{ steps.plan.outputs.folder }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: bash deploy/hsp-runner/health-check.sh "$FOLDER" "$VERSION"
+
+      - name: Server checks (box self-check, cua)
+        env:
+          FOLDER: ${{ steps.plan.outputs.folder }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: sudo -n /usr/local/sbin/omb-hsp-deploy checks "$FOLDER" "$VERSION"
+
+      - name: Roll back to ${{ steps.plan.outputs.old }}
+        if: (failure() || cancelled()) && steps.swap.outputs.backup != ''
+        env:
+          BACKUP: ${{ steps.swap.outputs.backup }}
+          OLD: ${{ steps.plan.outputs.old }}
+        run: |
+          sudo -n /usr/local/sbin/omb-hsp-deploy rollback "$BACKUP"
+          if bash deploy/hsp-runner/health-check.sh "$OLD"; then
+            echo "::warning::Deploy failed and was rolled back; $OLD is live and healthy."
+          else
+            echo "::error::Deploy failed, rolled back to $OLD, and $OLD is NOT healthy either. Check the server by hand."
+          fi
+          exit 1
+
+      - name: Summary
+        if: always()
+        env:
+          OLD: ${{ steps.plan.outputs.old }}
+          FOLDER: ${{ steps.plan.outputs.folder }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          BACKUP: ${{ steps.swap.outputs.backup }}
+          OUTCOME: ${{ job.status }}
+        run: |
+          {
+            echo "### hsp deploy: $OUTCOME"
+            echo "- from: \`$OLD\`"
+            echo "- to: \`$FOLDER\` (openmausbot $VERSION)"
+            [ -z "$BACKUP" ] || echo "- team.conf backup: \`$BACKUP\`"
+            [ "$OUTCOME" = success ] || echo "- on failure the workflow restores the backup and restarts \`$OLD\`"
+          } >> "$GITHUB_STEP_SUMMARY"
