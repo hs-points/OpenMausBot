@@ -1,0 +1,1245 @@
+From 6aac978e21a17e8d3809195903168309ffd309d4 Mon Sep 17 00:00:00 2001
+From: Huzefa Siamwala <huzefasid@gmail.com>
+Date: Fri, 13 Nov 2026 15:20:16 +0000
+Subject: [PATCH] feat(apps): a bot can be assigned its own connected account
+ per app
+
+A bot's new connectorAccounts setting names the connected account it uses for
+an app, and can keep that account to itself (exclusive). The harness relay
+writes the assigned account into every COMPOSIO_MULTI_EXECUTE_TOOL entry for
+that app, whatever the model asked for, and refuses the call when the account
+is no longer connected instead of falling back to another one. Other bots can
+no longer name an exclusive account by ID or alias. Calls that cannot be read
+(remote workbench, bash, proxy code, direct tool calls, batches) and
+disconnecting an account through COMPOSIO_MANAGE_CONNECTIONS are refused while
+account rules reach the bot. App-event automations follow the same choice, and
+a bot a Chief creates inherits the Chief's assignment.
+
+With no account assigned on any bot nothing changes. Bot Settings > Access
+gets an Accounts list (owner/admin only on a Team Cloud).
+
+Claude-Session: https://claude.ai/code/session_01S7mkJCMRBgQyRQMomQYhKE
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ server/app-trigger-host.ts                    |   2 +
+ server/app-triggers.test.ts                   |  17 ++
+ server/app-triggers.ts                        |  17 +-
+ server/connector-accounts.e2e.test.ts         | 169 +++++++++++++
+ server/connector-accounts.test.ts             | 200 ++++++++++++++++
+ server/connector-accounts.ts                  | 226 ++++++++++++++++++
+ server/index.ts                               |  28 ++-
+ server/inherited-apps.test.ts                 |   2 +
+ server/inherited-apps.ts                      |   6 +-
+ server/routes/bot-patch.ts                    |  16 ++
+ server/store.ts                               |   6 +
+ shared/wire.ts                                |   9 +
+ src/components/bot-settings/AccessSection.tsx |   9 +
+ .../bot-settings/ConnectorAccounts.test.ts    |  50 ++++
+ .../bot-settings/ConnectorAccounts.tsx        | 125 ++++++++++
+ .../bot-settings/useBotSettingsDerived.ts     |   1 +
+ src/locales/en.json                           |   9 +
+ src/state/bot-patch-queue.ts                  |   4 +-
+ src/state/store.tsx                           |   2 +-
+ 19 files changed, 887 insertions(+), 11 deletions(-)
+ create mode 100644 server/connector-accounts.e2e.test.ts
+ create mode 100644 server/connector-accounts.test.ts
+ create mode 100644 server/connector-accounts.ts
+ create mode 100644 src/components/bot-settings/ConnectorAccounts.test.ts
+ create mode 100644 src/components/bot-settings/ConnectorAccounts.tsx
+
+diff --git a/server/app-trigger-host.ts b/server/app-trigger-host.ts
+index 64509cfd0..e138ae65f 100644
+--- a/server/app-trigger-host.ts
++++ b/server/app-trigger-host.ts
+@@ -30,6 +30,7 @@ export interface AppTriggerHostDeps {
+   connectionMode: () => "managed" | "self-hosted" | "unavailable";
+   access: () => BrokerAccess | null;
+   connectedApps: () => Promise<Connected>;
++  accountChoice?: (botId: string, app: string) => { only: string } | { except: readonly string[] } | null;
+   routines: () => RoutineManager;
+   webhooks: WebhookManager;
+   /** Where webhook addresses start: this computer's receiver, or the workspace's public address. */
+@@ -74,6 +75,7 @@ export function createAppTriggerHost(deps: AppTriggerHostDeps) {
+     broker,
+     service,
+     connectedApps: deps.connectedApps,
++    accountChoice: deps.accountChoice,
+     botState: deps.botState,
+     runs: {
+       enqueue: (input) => deps.routines().enqueueWebhook(input),
+diff --git a/server/app-triggers.test.ts b/server/app-triggers.test.ts
+index 66494142b..cad89c541 100644
+--- a/server/app-triggers.test.ts
++++ b/server/app-triggers.test.ts
+@@ -80,6 +80,23 @@ describe("AppTriggerManager", () => {
+     expect(instance?.trigger_config).toEqual({ query: "from:acme.com subject:(order)" });
+   });
+ 
++  it("watches only the account a bot is assigned, and never one another bot keeps to itself", async () => {
++    const other = broker.account(owner.userId, "gmail", "support");
++    connected.gmail!.accounts.push({ id: other, alias: "support", status: "ACTIVE" });
++    const assigned = manager({ accountChoice: () => ({ only: other }) });
++    const trigger = await assigned.create({ botId: "bot-1", name: "Order replies", prompt: "Reply.", app: "gmail", event: "GMAIL_NEW_GMAIL_MESSAGE", account: "sales" });
++    expect(trigger, "the assigned account, whatever was asked for").toMatchObject({ accountId: other, accountLabel: "support" });
++    await expect(manager({ accountChoice: () => ({ only: "ca_gone" }) }).create({ botId: "bot-1", name: "Gone", prompt: "Reply.", app: "gmail", event: "GMAIL_NEW_GMAIL_MESSAGE" }))
++      .rejects.toThrow(/assigned to this bot is not connected/);
++    const kept = manager({ accountChoice: (botId, app) => (botId === "bot-2" && app === "gmail" ? { except: [other] } : null) });
++    await expect(kept.create({ botId: "bot-2", name: "Theirs", prompt: "Reply.", app: "gmail", event: "GMAIL_NEW_GMAIL_MESSAGE", account: "support" }))
++      .rejects.toThrow(/No connected Gmail account is called support\. The accounts are: sales\./);
++    expect(await kept.create({ botId: "bot-2", name: "Open", prompt: "Read.", app: "gmail", event: "GMAIL_NEW_GMAIL_MESSAGE" }), "the one account left needs no naming")
++      .toMatchObject({ accountId: gmail });
++    await expect(manager({ accountChoice: () => ({ except: [gmail, other] }) }).create({ botId: "bot-3", name: "None", prompt: "Reply.", app: "gmail", event: "GMAIL_NEW_GMAIL_MESSAGE" }))
++      .rejects.toThrow(/has no Gmail account/);
++  });
++
+   it("acks an event only after its run is saved: a failure before the save brings the same event back once", async () => {
+     const triggers = manager();
+     const trigger = await gmailTrigger(triggers);
+diff --git a/server/app-triggers.ts b/server/app-triggers.ts
+index f353797f3..ce226c8de 100644
+--- a/server/app-triggers.ts
++++ b/server/app-triggers.ts
+@@ -57,6 +57,8 @@ export interface AppTriggerManagerOptions {
+   /** Whether app events can work here at all, and why not. Checked on every loop, since access arrives late. */
+   service: () => { available: true } | { available: false; reason: "self-hosted" | "unavailable" | "off" };
+   connectedApps: () => Promise<ConnectedApps>;
++  /** Per-bot accounts: the one account this bot must watch for the app, or the accounts kept for other bots. */
++  accountChoice?: (botId: string, app: string) => { only: string } | { except: readonly string[] } | null;
+   botState: (botId: string) => "ready" | "busy" | "missing";
+   runs: {
+     enqueue(input: { webhookId: string; webhookName: string; prompt: string; botId: string; runOn: RoutineRunOn; deliveryId: string; receivedAt: number; eventSource: "app" }): { id: string };
+@@ -267,7 +269,7 @@ export class AppTriggerManager {
+     const type = await this.remote(() => this.options.broker.triggerType(input.event.trim()));
+     if (!type) throw new AppTriggerError(`${input.event} is not an event OpenMausBot can watch. Call trigger_info action=events to see the events this app offers.`, 404);
+     if (type.toolkit !== app) throw new AppTriggerError(`${type.slug} is a ${appLabel(type.toolkit)} event, not ${appLabel(app)}.`);
+-    const account = await this.resolveAccount(app, input.account);
++    const account = await this.resolveAccount(app, input.account, input.botId);
+     const filter = cleanFilter(input.filter);
+     const config = triggerConfig(type, input.config ?? {}, filter);
+     const duplicate = this.triggers.find((trigger) => trigger.enabled && trigger.botId === input.botId && trigger.event === type.slug &&
+@@ -646,15 +648,24 @@ export class AppTriggerManager {
+     trigger.skipped = { ...current, [reason]: current[reason] + 1 };
+   }
+ 
+-  private async resolveAccount(app: string, wanted: string | undefined): Promise<{ id: string; alias?: string }> {
++  private async resolveAccount(app: string, wanted: string | undefined, botId: string): Promise<{ id: string; alias?: string }> {
+     let apps: ConnectedApps;
+     try {
+       apps = await this.options.connectedApps();
+     } catch (error) {
+       throw new AppTriggerError(`Connected apps could not be checked: ${error instanceof Error ? error.message : String(error)}`, 503);
+     }
+-    const accounts = (apps[app]?.accounts ?? []).filter((account) => active(account.status));
++    const connected = (apps[app]?.accounts ?? []).filter((account) => active(account.status));
+     const label = appLabel(app);
++    const choice = this.options.accountChoice?.(botId, app) ?? null;
++    if (choice && "only" in choice) {
++      // The bot's assigned account, whatever was asked for.
++      const assigned = connected.find((account) => account.id === choice.only);
++      if (!assigned) throw new AppTriggerError(`The ${label} account assigned to this bot is not connected. Ask the person to reconnect it or to assign another account in this bot's Access settings.`, 409);
++      return assigned;
++    }
++    const accounts = choice ? connected.filter((account) => !choice.except.includes(account.id)) : connected;
++    if (connected.length && !accounts.length) throw new AppTriggerError(`This bot has no ${label} account: the connected ones are assigned to other bots. Ask the person to assign one in this bot's Access settings.`, 409);
+     if (!accounts.length) throw new AppTriggerError(`${label} is not connected. Ask the person to connect ${label} first (COMPOSIO_MANAGE_CONNECTIONS shows them a card for it), then create the automation.`, 409);
+     if (wanted?.trim()) {
+       const key = wanted.trim().toLowerCase();
+diff --git a/server/connector-accounts.e2e.test.ts b/server/connector-accounts.e2e.test.ts
+new file mode 100644
+index 000000000..17870d086
+--- /dev/null
++++ b/server/connector-accounts.e2e.test.ts
+@@ -0,0 +1,169 @@
++// Per-bot accounts against a real server: which account each bot's connected-app call reaches Composio with.
++import { spawn, type ChildProcess } from "node:child_process";
++import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
++import { createServer, type Server } from "node:http";
++import { join } from "node:path";
++import { fileURLToPath } from "node:url";
++import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
++import { launchVerificationServer, verificationServerEnvironment, type VerificationServer } from "../scripts/control-omb.ts";
++import { waitForExit } from "./testing/cleanup.ts";
++
++const key = "isolated-accounts-capability";
++let fixture: VerificationServer;
++let child: ChildProcess;
++let composio: Server;
++let origin = "";
++let milo: any;
++let maus: any;
++let plain: any;
++const relayed: any[] = [];
++const accounts = [
++  { id: "ca_team", alias: "team", status: "ACTIVE" },
++  { id: "ca_milo", alias: "milo", status: "ACTIVE" },
++  { id: "ca_maus", alias: "maus", status: "ACTIVE" },
++];
++
++const api = async (method: string, path: string, body?: unknown, token?: string) => {
++  const response = await fetch(fixture.info.url + path, {
++    method, headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
++    ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(20_000),
++  });
++  return { status: response.status, body: await response.json() as any };
++};
++const mint = async (bot: any) => {
++  const response = await fetch(fixture.info.url + "/api/testing/internal-capability", {
++    method: "POST", headers: { "content-type": "application/json", "x-openmausbot-test-capability": key },
++    body: JSON.stringify({ botId: bot.id, threadId: bot.threadId, kind: "connectors" }),
++  });
++  expect(response.status).toBe(201);
++  return (await response.json() as any).token as string;
++};
++const relay = async (bot: any, name: string, args: unknown = {}) => api("POST", "/api/internal/connectors/mcp",
++  { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name, arguments: args } }, await mint(bot));
++const run = (bot: any, account?: string) => relay(bot, "COMPOSIO_MULTI_EXECUTE_TOOL",
++  { tools: [{ tool_slug: "GITHUB_GET_A_REPOSITORY", arguments: { owner: "acme", repo: "site" }, ...(account === undefined ? {} : { account }) }] });
++const text = (answer: { body: any }) => String(answer.body?.result?.content?.[0]?.text ?? "");
++const reached = () => relayed.map((frame) => frame.params.arguments.tools[0].account);
++const assign = (bot: any, connectorAccounts: unknown) => api("PATCH", `/api/bots/${bot.id}`, { connectorAccounts });
++
++beforeAll(async () => {
++  composio = createServer(async (req, res) => {
++    let raw = "";
++    for await (const chunk of req) raw += chunk;
++    const path = new URL(req.url ?? "/", "http://fixture").pathname;
++    res.setHeader("content-type", "application/json");
++    if (path === "/api/tool_router/session/fixture-session") {
++      return res.end(JSON.stringify({ session_id: "fixture-session", mcp: { type: "http", url: origin + "/mcp" },
++        config: { user_id: "fixture-user", multi_account: { enable: true, max_accounts_per_toolkit: 5, require_explicit_selection: true } } }));
++    }
++    if (path === "/api/connected_accounts") {
++      return res.end(JSON.stringify({ items: accounts.map((account) => ({ ...account, user_id: "fixture-user", updated_at: "2026-11-01T00:00:00Z", toolkit: { slug: "github" } })) }));
++    }
++    if (path === "/mcp") {
++      const body = JSON.parse(raw);
++      if (body.method === "tools/call") relayed.push(body);
++      return res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? null, result: { content: [{ type: "text", text: "relay-ok" }] } }));
++    }
++    return res.end(JSON.stringify({ items: [{ slug: "github", connected_account: { id: "ca_team", status: "ACTIVE" } }] }));
++  });
++  await new Promise<void>((resolve) => composio.listen(0, "127.0.0.1", resolve));
++  origin = `http://127.0.0.1:${(composio.address() as { port: number }).port}`;
++  fixture = await launchVerificationServer();
++  const make = async (name: string) => {
++    const created = await api("POST", "/api/bots", { name });
++    expect(created.status, JSON.stringify(created.body)).toBe(201);
++    return created.body.bot;
++  };
++  milo = await make("Milo");
++  maus = await make("MausBot");
++  plain = await make("Plain");
++  await waitForExit(fixture.child, { signal: "SIGTERM" });
++  const configFile = join(fixture.info.dataDir, "config.json");
++  const config = JSON.parse(readFileSync(configFile, "utf8"));
++  config.composio = { apiKey: "ak_isolated_fixture", userId: "fixture-user", sessionId: "fixture-session" };
++  writeFileSync(configFile, JSON.stringify(config));
++  const log = openSync(fixture.info.logPath, "a", 0o600);
++  child = spawn(process.execPath, ["--experimental-strip-types", fileURLToPath(new URL("./index.ts", import.meta.url))], {
++    cwd: fileURLToPath(new URL("..", import.meta.url)),
++    env: { ...verificationServerEnvironment({}, fixture.info.dataDir, Number(new URL(fixture.info.url).port)),
++      OMB_TEST_INTERNAL_CAPABILITY_KEY: key, OMB_COMPOSIO_API: origin + "/api", OMB_COMPOSIO_TOOLKITS_API: origin + "/api" },
++    stdio: ["ignore", log, log],
++  });
++  closeSync(log);
++  const deadline = Date.now() + 20_000;
++  while (Date.now() < deadline) {
++    try { if ((await fetch(fixture.info.url + "/api/health")).ok) return; } catch {}
++    await new Promise((resolve) => setTimeout(resolve, 20));
++  }
++  throw new Error("isolated accounts server did not start");
++}, 40_000);
++
++afterAll(async () => {
++  await waitForExit(child, { signal: "SIGTERM" });
++  await fixture.close();
++  await new Promise<void>((resolve) => composio.close(() => resolve()));
++});
++
++beforeEach(() => { relayed.length = 0; });
++
++it("changes nothing while no bot has an account assigned", async () => {
++  expect(text(await run(plain, "milo"))).toBe("relay-ok");
++  expect(text(await run(plain))).toBe("relay-ok");
++  expect(text(await relay(plain, "COMPOSIO_REMOTE_WORKBENCH", { code_to_execute: "1" }))).toBe("relay-ok");
++  expect(relayed.slice(0, 2).map((frame) => frame.params.arguments.tools[0]), "the bot's own words reach Composio").toEqual([
++    { tool_slug: "GITHUB_GET_A_REPOSITORY", arguments: { owner: "acme", repo: "site" }, account: "milo" },
++    { tool_slug: "GITHUB_GET_A_REPOSITORY", arguments: { owner: "acme", repo: "site" } },
++  ]);
++}, 30_000);
++
++it("saves an assignment only for an account connected for that app", async () => {
++  expect((await assign(milo, { github: { account: "ca_nobody" } })).status).toBe(400);
++  expect((await assign(milo, { gmail: { account: "ca_milo" } })).status).toBe(400);
++  expect((await assign(milo, { github: "ca_milo" })).status).toBe(400);
++  const saved = await assign(milo, { github: { account: "ca_milo", exclusive: true } });
++  expect(saved.status, JSON.stringify(saved.body)).toBe(200);
++  expect(saved.body.bot.connectorAccounts).toEqual({ github: { account: "ca_milo", exclusive: true } });
++  expect((await assign(maus, { github: { account: "ca_maus", exclusive: true } })).status).toBe(200);
++}, 30_000);
++
++it("runs each bot's calls as its own account, whatever the bot asks for", async () => {
++  for (const asked of [undefined, "maus", "ca_maus", "team"]) expect(text(await run(milo, asked)), String(asked)).toBe("relay-ok");
++  expect(reached()).toEqual(["ca_milo", "ca_milo", "ca_milo", "ca_milo"]);
++  relayed.length = 0;
++  for (const asked of [undefined, "milo", "ca_milo"]) expect(text(await run(maus, asked)), String(asked)).toBe("relay-ok");
++  expect(reached()).toEqual(["ca_maus", "ca_maus", "ca_maus"]);
++}, 30_000);
++
++it("keeps a bot without an assignment off the accounts other bots keep to themselves", async () => {
++  for (const asked of ["milo", "ca_milo", "MAUS", "ca_maus"]) expect(text(await run(plain, asked)), asked).toMatch(/has no Github account by that name/);
++  expect(relayed, "nothing reached Composio").toEqual([]);
++  expect(text(await run(plain))).toBe("relay-ok");
++  expect(text(await run(plain, "team"))).toBe("relay-ok");
++  expect(reached(), "the one account left").toEqual(["ca_team", "ca_team"]);
++}, 30_000);
++
++it("refuses code it cannot check, for every bot, while accounts are assigned", async () => {
++  for (const bot of [milo, plain]) {
++    expect(text(await relay(bot, "COMPOSIO_REMOTE_WORKBENCH", { code_to_execute: "run_composio_tool('GITHUB_GET_A_REPOSITORY', {})" }))).toMatch(/can't check which account/);
++    expect(text(await relay(bot, "GITHUB_GET_A_REPOSITORY", { owner: "acme", repo: "site" }))).toMatch(/COMPOSIO_MULTI_EXECUTE_TOOL/);
++  }
++  expect(relayed).toEqual([]);
++  expect(text(await relay(milo, "COMPOSIO_SEARCH_TOOLS", { queries: [{ use_case: "read a repository" }] }))).toBe("relay-ok");
++}, 30_000);
++
++it("refuses the call, and uses no other account, once the assigned account is signed out", async () => {
++  accounts[1]!.status = "EXPIRED";
++  // Saving any assignment drops the few seconds of remembered accounts.
++  expect((await assign(maus, { github: { account: "ca_maus", exclusive: true } })).status).toBe(200);
++  expect(text(await run(milo))).toMatch(/no longer connected.*No other account was used/);
++  expect(relayed).toEqual([]);
++  accounts[1]!.status = "ACTIVE";
++}, 30_000);
++
++it("goes back to today's behaviour when the assignments are cleared", async () => {
++  expect((await assign(milo, null)).body.bot.connectorAccounts).toBeUndefined();
++  expect((await assign(maus, {})).body.bot.connectorAccounts).toBeUndefined();
++  expect(text(await run(plain, "milo"))).toBe("relay-ok");
++  expect(text(await run(milo))).toBe("relay-ok");
++  expect(reached()).toEqual(["milo", undefined]);
++}, 30_000);
+diff --git a/server/connector-accounts.test.ts b/server/connector-accounts.test.ts
+new file mode 100644
+index 000000000..b03f06dd8
+--- /dev/null
++++ b/server/connector-accounts.test.ts
+@@ -0,0 +1,200 @@
++import { beforeEach, describe, expect, it } from "vitest";
++
++import {
++  accountChoiceFor, accountRulesFor, applyAccountRules, connectorAccountsPrompt, forgetAccountInventories, parseConnectorAccounts,
++  recentAccountInventory, type AccountInventory, type AccountRules,
++} from "./connector-accounts.ts";
++
++const inventory: AccountInventory = {
++  github: { accounts: [
++    { id: "ca_team", alias: "team", status: "ACTIVE" },
++    { id: "ca_milo", alias: "Milo", status: "ACTIVE" },
++    { id: "ca_maus", alias: "maus", status: "ACTIVE" },
++    { id: "ca_old", alias: "old", status: "EXPIRED" },
++  ] },
++  gmail: { accounts: [{ id: "ca_mail", status: "ACTIVE" }] },
++};
++const read = async () => inventory;
++const call = (tools: unknown, name = "COMPOSIO_MULTI_EXECUTE_TOOL") => ({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: { tools } } });
++const sent = (decision: Awaited<ReturnType<typeof applyAccountRules>>) => {
++  if (!decision.ok) throw new Error(decision.text);
++  return (decision.payload as { params: { arguments: { tools: Array<{ tool_slug: string; account?: string }> } } }).params.arguments.tools.map((tool) => tool.account);
++};
++const refusal = (decision: Awaited<ReturnType<typeof applyAccountRules>>) => (decision.ok ? "" : decision.text);
++
++const bots = [
++  { id: "milo", connectorAccounts: { github: { account: "ca_milo", exclusive: true as const } } },
++  { id: "maus", connectorAccounts: { github: { account: "ca_maus", exclusive: true as const } } },
++  { id: "shared", connectorAccounts: { github: { account: "ca_team" } } },
++  { id: "plain" },
++];
++const rules = (botId: string) => accountRulesFor(botId, bots)!;
++
++describe("a bot's assigned accounts, as saved", () => {
++  it("keeps only an account ID and the exclusive mark per app", () => {
++    expect(parseConnectorAccounts({ github: { account: "ca_milo", exclusive: true }, gmail: { account: "ca_mail", exclusive: false } }))
++      .toEqual({ ok: true, accounts: { github: { account: "ca_milo", exclusive: true }, gmail: { account: "ca_mail" } } });
++    expect(parseConnectorAccounts(null)).toEqual({ ok: true, accounts: undefined });
++    expect(parseConnectorAccounts({})).toEqual({ ok: true, accounts: undefined });
++  });
++
++  it("refuses anything else", () => {
++    for (const bad of [[], "ca_milo", { GitHub: { account: "ca_milo" } }, { github: "ca_milo" }, { github: { account: "../x" } }, { github: { account: "" } },
++      { github: { account: "ca_milo", exclusive: "yes" } }, { github: { account: "ca_milo", token: "x" } }]) {
++      expect(parseConnectorAccounts(bad).ok, JSON.stringify(bad)).toBe(false);
++    }
++  });
++});
++
++describe("which rules reach a bot", () => {
++  it("are none while no bot has an account assigned", () => {
++    expect(accountRulesFor("plain", [{ id: "plain" }, { id: "other" }])).toBeNull();
++    expect(accountRulesFor("plain", [{ id: "plain" }, { id: "other", connectorAccounts: { github: { account: "ca_team" } } }]), "another bot's shared pick").toBeNull();
++  });
++
++  it("are its own accounts and the ones other bots keep to themselves", () => {
++    expect(rules("milo")).toEqual({ own: { github: { account: "ca_milo", exclusive: true } }, reserved: { github: ["ca_maus"] } });
++    expect(rules("plain")).toEqual({ own: {}, reserved: { github: ["ca_milo", "ca_maus"] } });
++    const twins = [{ id: "a", connectorAccounts: { github: { account: "ca_x", exclusive: true as const } } }, { id: "b", connectorAccounts: { github: { account: "ca_x" } } }];
++    expect(accountRulesFor("b", twins), "two bots assigned the same account both use it").toEqual({ own: { github: { account: "ca_x" } }, reserved: {} });
++  });
++
++  it("give an automation the same choice", () => {
++    expect(accountChoiceFor(rules("milo"), "github")).toEqual({ only: "ca_milo" });
++    expect(accountChoiceFor(rules("plain"), "github")).toEqual({ except: ["ca_milo", "ca_maus"] });
++    expect(accountChoiceFor(rules("plain"), "gmail")).toBeNull();
++    expect(accountChoiceFor(null, "github")).toBeNull();
++  });
++});
++
++describe("a call from a bot with an assigned account", () => {
++  it("always leaves with that account, whatever the bot asked for", async () => {
++    const tools = [
++      { tool_slug: "GITHUB_GET_A_REPOSITORY", arguments: { repo: "x" } },
++      { tool_slug: "GITHUB_LIST_ISSUES", arguments: {}, account: "maus" },
++      { tool_slug: "GITHUB_LIST_ISSUES", arguments: {}, account: "ca_team" },
++      { tool_slug: "GMAIL_FETCH_EMAILS", arguments: {}, account: "work" },
++    ];
++    const decision = await applyAccountRules(call(tools), rules("milo"), read, ["github", "gmail"]);
++    expect(sent(decision)).toEqual(["ca_milo", "ca_milo", "ca_milo", "work"]);
++    expect(decision.ok && decision.used).toEqual({ github: "ca_milo" });
++    expect(tools[1]!.account, "the bot's own frame is not changed in place").toBe("maus");
++  });
++
++  it("is refused, never moved to another account, when the assigned one is gone or signed out", async () => {
++    const gone: AccountRules = { own: { github: { account: "ca_removed" } }, reserved: {} };
++    expect(refusal(await applyAccountRules(call([{ tool_slug: "GITHUB_LIST_ISSUES" }]), gone, read))).toMatch(/no longer connected.*No other account was used/);
++    const expired: AccountRules = { own: { github: { account: "ca_old" } }, reserved: {} };
++    expect(refusal(await applyAccountRules(call([{ tool_slug: "GITHUB_LIST_ISSUES" }]), expired, read))).toMatch(/no longer connected/);
++  });
++
++  it("is refused when the accounts cannot be read", async () => {
++    const decision = await applyAccountRules(call([{ tool_slug: "GITHUB_LIST_ISSUES" }]), rules("milo"), async () => { throw new Error("offline"); });
++    expect(refusal(decision)).toMatch(/could not check/);
++  });
++
++  it("finds the app however its slug is spelled", async () => {
++    const drive: AccountRules = { own: { "google-drive": { account: "ca_drive" } }, reserved: {} };
++    const known = { "google-drive": { accounts: [{ id: "ca_drive", status: "ACTIVE" }] } };
++    for (const slug of ["GOOGLEDRIVE_FIND_FILE", "GOOGLE_DRIVE_FIND_FILE"]) {
++      expect(sent(await applyAccountRules(call([{ tool_slug: slug, account: "other" }]), drive, async () => known)), slug).toEqual(["ca_drive"]);
++    }
++    const google: AccountRules = { own: { google: { account: "ca_google" } }, reserved: {} };
++    const frame = call([{ tool_slug: "GOOGLE_DRIVE_FIND_FILE", account: "other" }]);
++    expect(sent(await applyAccountRules(frame, google, read, ["google", "google_drive"])), "a longer connected app is not taken for a shorter one").toEqual(["other"]);
++  });
++});
++
++describe("a call from a bot without an assigned account", () => {
++  it("never reaches an account another bot keeps to itself", async () => {
++    for (const account of ["ca_milo", "milo", "MILO", " Milo ", "ca_maus", "maus"]) {
++      const decision = await applyAccountRules(call([{ tool_slug: "GITHUB_LIST_ISSUES", account }]), rules("plain"), read);
++      expect(decision.ok, account).toBe(false);
++      expect(refusal(decision), "says what it may use, not whose the other is").toBe("This bot has no Github account by that name; it may use team. This call was not run.");
++    }
++    expect((await applyAccountRules(call([{ tool_slug: "GITHUB_LIST_ISSUES", account: { id: "ca_milo" } }]), rules("plain"), read)).ok).toBe(false);
++  });
++
++  it("uses the one account left, by ID", async () => {
++    expect(sent(await applyAccountRules(call([{ tool_slug: "GITHUB_LIST_ISSUES" }]), rules("plain"), read))).toEqual(["ca_team"]);
++    expect(sent(await applyAccountRules(call([{ tool_slug: "GITHUB_LIST_ISSUES", account: "Team" }]), rules("plain"), read))).toEqual(["ca_team"]);
++  });
++
++  it("must name one when several are left, and has none when all are kept", async () => {
++    const one: AccountRules = { own: {}, reserved: { github: ["ca_milo"] } };
++    expect(refusal(await applyAccountRules(call([{ tool_slug: "GITHUB_LIST_ISSUES" }]), one, read))).toMatch(/pass account on the tool entry, one of team, maus/);
++    expect(sent(await applyAccountRules(call([{ tool_slug: "GITHUB_LIST_ISSUES", account: "maus" }]), one, read))).toEqual(["ca_maus"]);
++    const all: AccountRules = { own: {}, reserved: { github: ["ca_team", "ca_milo", "ca_maus"] } };
++    expect(refusal(await applyAccountRules(call([{ tool_slug: "GITHUB_LIST_ISSUES" }]), all, read))).toMatch(/has no Github account/);
++  });
++
++  it("leaves other apps exactly as sent, without reading the accounts", async () => {
++    const frame = call([{ tool_slug: "GMAIL_FETCH_EMAILS", arguments: { q: "x" }, account: "work" }]);
++    const decision = await applyAccountRules(frame, rules("plain"), async () => { throw new Error("not read"); });
++    expect(decision).toEqual({ ok: true, payload: frame, used: {} });
++    expect(decision.ok && decision.payload).toBe(frame);
++  });
++});
++
++describe("calls OpenMausBot cannot check", () => {
++  it("are refused once account rules reach the bot", async () => {
++    for (const name of ["COMPOSIO_REMOTE_WORKBENCH", "COMPOSIO_REMOTE_BASH_TOOL", "COMPOSIO_PROXY_EXECUTE", "COMPOSIO_SOMETHING_NEW"]) {
++      expect(refusal(await applyAccountRules(call(undefined, name), rules("plain"), read)), name).toMatch(/can't check which account/);
++    }
++    expect(refusal(await applyAccountRules(call([{ tool_slug: "GITHUB_LIST_ISSUES" }], "GITHUB_LIST_ISSUES"), rules("milo"), read))).toMatch(/COMPOSIO_MULTI_EXECUTE_TOOL/);
++    expect(refusal(await applyAccountRules([call([{ tool_slug: "GITHUB_LIST_ISSUES" }])], rules("milo"), read)), "a batch").toMatch(/one call at a time/);
++    expect(refusal(await applyAccountRules({ method: "tools/call" }, rules("milo"), read))).toMatch(/could not read this call/);
++    for (const args of [undefined, "text", { tool_slug: "GITHUB_LIST_ISSUES" }, { tools: [] }, { tools: [{ slug: "GITHUB_LIST_ISSUES" }] }, { tools: ["GITHUB_LIST_ISSUES"] }]) {
++      const frame = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: args } };
++      expect((await applyAccountRules(frame, rules("milo"), read)).ok, JSON.stringify(args)).toBe(false);
++    }
++  });
++
++  it("include disconnecting an account through Composio's connection tool", async () => {
++    for (const args of [{ toolkits: [{ name: "github", action: "remove" }] }, { toolkits: ["github"], action: "disconnect" }, { toolkits: [{ toolkit: "github", action: "DELETE", account: "milo" }] }]) {
++      const frame = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "COMPOSIO_MANAGE_CONNECTIONS", arguments: args } };
++      expect(refusal(await applyAccountRules(frame, rules("plain"), read)), JSON.stringify(args)).toMatch(/can't disconnect/);
++    }
++    const add = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "COMPOSIO_MANAGE_CONNECTIONS", arguments: { toolkits: ["github"] } } };
++    expect((await applyAccountRules(add, rules("plain"), read)).ok).toBe(true);
++  });
++
++  it("do not include search, schemas, connection cards or other protocol frames", async () => {
++    for (const name of ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS", "COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_WAIT_FOR_CONNECTIONS", "GITHUB_MANAGE_CONNECTIONS"]) {
++      expect((await applyAccountRules(call(undefined, name), rules("milo"), read)).ok, name).toBe(true);
++    }
++    const list = { jsonrpc: "2.0", id: 2, method: "tools/list" };
++    expect(await applyAccountRules(list, rules("milo"), read)).toEqual({ ok: true, payload: list, used: {} });
++    expect((await applyAccountRules(call([{ tool_slug: "GMAIL_FETCH_EMAILS" }], "GMAIL_FETCH_EMAILS"), rules("milo"), read)).ok, "a direct call to an app without a rule").toBe(true);
++  });
++});
++
++describe("what the bot is told", () => {
++  it("names the apps with an assigned account, and nothing without one", () => {
++    expect(connectorAccountsPrompt(undefined)).toBe("");
++    expect(connectorAccountsPrompt({})).toBe("");
++    const line = connectorAccountsPrompt({ github: { account: "ca_milo" }, google_drive: { account: "ca_drive" } });
++    expect(line).toContain("Github, Google Drive");
++    expect(line, "never the account ID").not.toMatch(/ca_/);
++  });
++});
++
++describe("the accounts read for a turn's calls", () => {
++  beforeEach(() => forgetAccountInventories());
++
++  it("are read once per installation every few seconds, and again after a failure", async () => {
++    let reads = 0;
++    const once = async () => { reads += 1; return inventory; };
++    await recentAccountInventory("server", once, 1_000);
++    await recentAccountInventory("server", once, 5_000);
++    expect(reads).toBe(1);
++    await recentAccountInventory("member", once, 5_000);
++    await recentAccountInventory("server", once, 30_000);
++    expect(reads).toBe(3);
++    forgetAccountInventories();
++    await expect(recentAccountInventory("server", async () => { throw new Error("offline"); }, 1_000)).rejects.toThrow("offline");
++    await new Promise((resolve) => setImmediate(resolve));
++    await recentAccountInventory("server", once, 2_000);
++    expect(reads).toBe(4);
++  });
++});
+diff --git a/server/connector-accounts.ts b/server/connector-accounts.ts
+new file mode 100644
+index 000000000..5d1cc5aaa
+--- /dev/null
++++ b/server/connector-accounts.ts
+@@ -0,0 +1,226 @@
++// Which connected account a bot's app calls run as. A bot's `connectorAccounts` assigns it one account per app; an
++// assignment marked `exclusive` also keeps every other bot off that account. Enforced where every Composio call crosses
++// the harness (POST /api/internal/connectors/mcp), so the model's own `account` argument never decides: an assigned
++// account is written into the call, and a call OpenMausBot cannot read is refused. With no assignment on any bot,
++// nothing here runs and calls pass exactly as before.
++import { createHash } from "node:crypto";
++
++import { CONNECTOR_SLUG_PATTERN, type ConnectorAccountPin } from "../shared/wire.ts";
++import { ACCOUNT_ID } from "./composio-inventory-schema.ts";
++import { COMPOSIO_MULTI_EXECUTE_TOOL, serviceSlugFor, serviceSlugForCandidates } from "./connector-verdict.ts";
++
++export type ConnectorAccounts = Record<string, ConnectorAccountPin>;
++
++const CONNECTOR_ACCOUNTS_MAX = 100;
++
++/** `null` and `{}` both clear the assignments. */
++export function parseConnectorAccounts(value: unknown): { ok: true; accounts: ConnectorAccounts | undefined } | { ok: false; error: string } {
++  if (value === null) return { ok: true, accounts: undefined };
++  if (!value || typeof value !== "object" || Array.isArray(value)) {
++    return { ok: false, error: "connectorAccounts must be an object of app slugs to { account, exclusive? }, or null" };
++  }
++  const entries = Object.entries(value);
++  if (entries.length > CONNECTOR_ACCOUNTS_MAX) return { ok: false, error: `connectorAccounts may name at most ${CONNECTOR_ACCOUNTS_MAX} apps` };
++  const accounts: ConnectorAccounts = {};
++  for (const [slug, pin] of entries) {
++    if (!CONNECTOR_SLUG_PATTERN.test(slug)) return { ok: false, error: `connectorAccounts app slugs must be lowercase slugs (got "${slug}")` };
++    if (!pin || typeof pin !== "object" || Array.isArray(pin)) return { ok: false, error: `connectorAccounts.${slug} must be { account, exclusive? }` };
++    const { account, exclusive, ...rest } = pin as { account?: unknown; exclusive?: unknown };
++    if (Object.keys(rest).length) return { ok: false, error: `connectorAccounts.${slug} accepts only account and exclusive` };
++    if (typeof account !== "string" || !ACCOUNT_ID.test(account)) return { ok: false, error: `connectorAccounts.${slug}.account must be a connected account ID` };
++    if (exclusive !== undefined && typeof exclusive !== "boolean") return { ok: false, error: `connectorAccounts.${slug}.exclusive must be true or false` };
++    accounts[slug] = exclusive === true ? { account, exclusive: true } : { account };
++  }
++  return { ok: true, accounts: Object.keys(accounts).length ? accounts : undefined };
++}
++
++export interface AccountRules {
++  /** The account this bot must use, per app. */
++  own: ConnectorAccounts;
++  /** Per app, the accounts kept for other bots: this bot may never use them. */
++  reserved: Record<string, string[]>;
++}
++
++type BotAccounts = { id: string; connectorAccounts?: ConnectorAccounts };
++
++/** Null when no rule touches this bot: it has no assigned account and no other bot keeps one to itself. */
++export function accountRulesFor(botId: string, bots: Iterable<BotAccounts>): AccountRules | null {
++  let own: ConnectorAccounts = {};
++  const exclusive = new Map<string, Set<string>>();
++  for (const bot of bots) {
++    const pins = bot.connectorAccounts;
++    if (!pins) continue;
++    if (bot.id === botId) own = pins;
++    for (const [slug, pin] of Object.entries(pins)) {
++      if (!pin.exclusive) continue;
++      const ids = exclusive.get(slug) ?? new Set<string>();
++      ids.add(pin.account);
++      exclusive.set(slug, ids);
++    }
++  }
++  const reserved: Record<string, string[]> = {};
++  for (const [slug, ids] of exclusive) {
++    const kept = [...ids].filter((id) => !Object.hasOwn(own, slug) || own[slug]!.account !== id);
++    if (kept.length) reserved[slug] = kept;
++  }
++  return Object.keys(own).length || Object.keys(reserved).length ? { own, reserved } : null;
++}
++
++/** For an app-event automation: the one account this bot must watch, or the accounts it may not. Null: no rule. */
++export function accountChoiceFor(rules: AccountRules | null, app: string): { only: string } | { except: readonly string[] } | null {
++  if (!rules) return null;
++  if (Object.hasOwn(rules.own, app)) return { only: rules.own[app]!.account };
++  return Object.hasOwn(rules.reserved, app) ? { except: rules.reserved[app]! } : null;
++}
++
++export type AccountInventory = Record<string, { accounts: ReadonlyArray<{ id: string; alias?: string; status: string }> }>;
++
++export type AccountDecision =
++  | { ok: true; payload: unknown; /** app → the account id written into the call */ used: Record<string, string> }
++  | { ok: false; text: string };
++
++const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
++const active = (status: string) => /^active$/i.test(status);
++const label = (slug: string) => slug.split(/[-_]+/).map((part) => (part ? part[0]!.toUpperCase() + part.slice(1) : part)).join(" ");
++const NOT_RUN = "This call was not run.";
++
++/** Composio's tools that run no app tool: search, schemas and the connection cards. */
++function runsNoAppTool(name: string): boolean {
++  return ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_GET_TOOL_SCHEMAS", "COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_WAIT_FOR_CONNECTIONS"].includes(name)
++    || name.endsWith("_MANAGE_CONNECTIONS") || name.endsWith("_WAIT_FOR_CONNECTIONS");
++}
++
++/**
++ * The frame as it may be sent for this bot: each app call carries the account the rules allow, or the whole frame is
++ * refused. `inventory` is read only when a call touches an app with a rule; a read that fails refuses the call.
++ */
++export async function applyAccountRules(
++  payload: unknown,
++  rules: AccountRules,
++  inventory: () => Promise<AccountInventory>,
++  serviceSlugs: readonly string[] = [],
++): Promise<AccountDecision> {
++  // A JSON-RPC batch is never read call by call.
++  if (Array.isArray(payload)) return { ok: false, text: `OpenMausBot could not check which account this request would use. ${NOT_RUN} Send one call at a time.` };
++  if (!isRecord(payload) || payload.method !== "tools/call") return { ok: true, payload, used: {} };
++  const params = payload.params;
++  const name = isRecord(params) ? params.name : undefined;
++  if (!isRecord(params) || typeof name !== "string" || !name) {
++    return { ok: false, text: `OpenMausBot could not read this call, so it could not check which account it would use. ${NOT_RUN}` };
++  }
++  if (runsNoAppTool(name)) {
++    // Composio's connection tool can also disconnect an account, and takes no word on whose it is.
++    if (name.endsWith("MANAGE_CONNECTIONS") && /remov|delet|disconnect|revok/i.test(JSON.stringify(params.arguments ?? null))) {
++      return { ok: false, text: `Connected accounts are assigned per bot here, so a bot can't disconnect one. ${NOT_RUN} Ask the person to do it on the Apps page.` };
++    }
++    return { ok: true, payload, used: {} };
++  }
++  const ruledApps = [...new Set([...Object.keys(rules.own), ...Object.keys(rules.reserved)])];
++  // An app with a rule is matched first and loosely (google-drive, google_drive and googledrive are one app): a tool
++  // must never slip past its app's rule over a spelling.
++  const squashed = (text: string) => text.replace(/[-_]/g, "").toUpperCase();
++  const appOf = (tool: string) => {
++    const parts = tool.split("_");
++    let match: string | null = null;
++    for (const app of ruledApps) {
++      const hit = parts.some((_, index) => index > 0 && squashed(parts.slice(0, index).join("_")) === squashed(app));
++      if (hit && (match === null || app.length > match.length)) match = app;
++    }
++    // A longer connected app wins: with a rule on "google", GOOGLE_DRIVE_FIND_FILE still belongs to google_drive.
++    const connected = serviceSlugForCandidates(tool, serviceSlugs);
++    if (connected && (match === null || squashed(connected).length > squashed(match).length)) return connected;
++    return match ?? serviceSlugFor(tool);
++  };
++  const ruled = (app: string | null): app is string => app !== null && ruledApps.includes(app);
++
++  if (name !== COMPOSIO_MULTI_EXECUTE_TOOL) {
++    if (name.startsWith("COMPOSIO_")) {
++      // Workbench, bash and proxy code can reach any account of any app.
++      return { ok: false, text: `OpenMausBot can't check which account ${name} would use, and connected accounts are assigned per bot here. ${NOT_RUN} Run the app's tools with ${COMPOSIO_MULTI_EXECUTE_TOOL} instead.` };
++    }
++    const app = appOf(name);
++    if (!ruled(app)) return { ok: true, payload, used: {} };
++    return { ok: false, text: `${label(app)} accounts are assigned per bot here, and a direct ${name} call names no account. ${NOT_RUN} Run it with ${COMPOSIO_MULTI_EXECUTE_TOOL} as tools: [{ tool_slug, arguments }].` };
++  }
++
++  const args = params.arguments;
++  const tools = isRecord(args) ? args.tools : undefined;
++  if (!isRecord(args) || !Array.isArray(tools) || !tools.length) {
++    return { ok: false, text: `OpenMausBot could not read which tools this ${COMPOSIO_MULTI_EXECUTE_TOOL} call runs, so it could not check their accounts. ${NOT_RUN} Send the tools as tools: [{ tool_slug, arguments }].` };
++  }
++  let known: AccountInventory | null = null;
++  const used: Record<string, string> = {};
++  const items: unknown[] = [];
++  for (const item of tools) {
++    const slug = isRecord(item) ? item.tool_slug : undefined;
++    if (!isRecord(item) || typeof slug !== "string" || !slug) {
++      return { ok: false, text: `An entry in the tools list named no tool_slug, so OpenMausBot could not check its account. ${NOT_RUN}` };
++    }
++    const app = appOf(slug);
++    if (!ruled(app)) {
++      items.push(item);
++      continue;
++    }
++    if (!known) {
++      try {
++        known = await inventory();
++      } catch {
++        return { ok: false, text: `OpenMausBot could not check the connected ${label(app)} accounts just now. ${NOT_RUN} Try again in a moment.` };
++      }
++    }
++    const working = (Object.hasOwn(known, app) ? known[app]!.accounts : []).filter((account) => active(account.status));
++    let account: string;
++    if (Object.hasOwn(rules.own, app)) {
++      account = rules.own[app]!.account;
++      if (!working.some((candidate) => candidate.id === account)) {
++        return { ok: false, text: `The ${label(app)} account assigned to this bot is no longer connected. ${NOT_RUN} Ask the person to reconnect it or to assign another account in this bot's Access settings. No other account was used.` };
++      }
++    } else {
++      const reserved = rules.reserved[app]!;
++      const open = working.filter((candidate) => !reserved.includes(candidate.id));
++      const names = open.map((candidate) => candidate.alias ?? candidate.id).join(", ");
++      const wanted = item.account;
++      if (wanted === undefined || wanted === null || wanted === "") {
++        if (!open.length) return { ok: false, text: `This bot has no ${label(app)} account: the connected ones are assigned to other bots. ${NOT_RUN} Ask the person to assign one in this bot's Access settings.` };
++        if (open.length > 1) return { ok: false, text: `Name the ${label(app)} account to use: pass account on the tool entry, one of ${names}. ${NOT_RUN}` };
++        account = open[0]!.id;
++      } else {
++        const key = typeof wanted === "string" ? wanted.trim() : "";
++        const match = key ? open.find((candidate) => candidate.id === key || candidate.alias?.toLowerCase() === key.toLowerCase()) : undefined;
++        // Never says whether the name belongs to another bot's account.
++        if (!match) return { ok: false, text: `This bot has no ${label(app)} account by that name${names ? `; it may use ${names}` : ""}. ${NOT_RUN}` };
++        account = match.id;
++      }
++    }
++    used[app] = account;
++    items.push({ ...item, account });
++  }
++  if (!Object.keys(used).length) return { ok: true, payload, used };
++  return { ok: true, payload: { ...payload, params: { ...params, arguments: { ...args, tools: items } } }, used };
++}
++
++/** A system-prompt line: which apps run as an assigned account, so the bot does not go looking for one. */
++export function connectorAccountsPrompt(pins: ConnectorAccounts | undefined): string {
++  const apps = Object.keys(pins ?? {});
++  if (!apps.length) return "";
++  return ` For ${apps.map(label).join(", ")}, OpenMausBot already chose the account this bot uses and applies it to every call: leave account out, and do not try another one.`;
++}
++
++const INVENTORY_TTL_MS = 15_000;
++const inventories = new Map<string, { at: number; value: Promise<AccountInventory> }>();
++
++/** One inventory read per installation every few seconds, however many calls a turn makes; a failed read is not kept. */
++export function recentAccountInventory(installation: string, read: () => Promise<AccountInventory>, now = Date.now()): Promise<AccountInventory> {
++  const key = createHash("sha256").update(installation).digest("hex");
++  const held = inventories.get(key);
++  if (held && now - held.at < INVENTORY_TTL_MS) return held.value;
++  const value = read();
++  inventories.set(key, { at: now, value });
++  value.catch(() => { if (inventories.get(key)?.value === value) inventories.delete(key); });
++  for (const [other, entry] of inventories) if (now - entry.at >= INVENTORY_TTL_MS) inventories.delete(other);
++  return value;
++}
++
++export function forgetAccountInventories(): void {
++  inventories.clear();
++}
+diff --git a/server/index.ts b/server/index.ts
+index 67d1f10b8..b4bdc63b6 100644
+--- a/server/index.ts
++++ b/server/index.ts
+@@ -473,6 +473,7 @@ import { describeTool } from "./activity.ts";
+ import { OutboundRequestService } from "./outbound-requests.ts";
+ import { createOutboundHold, OUTBOUND_HOLD_MS, type OutboundHoldAnswer } from "./outbound-hold.ts";
+ import { connectorCallsIn, outboundCallsIn } from "../shared/outbound.ts";
++import { accountChoiceFor, accountRulesFor, applyAccountRules, connectorAccountsPrompt, recentAccountInventory } from "./connector-accounts.ts";
+ import { connectorAccessDecision, describeConnectorScopes } from "../shared/connector-scopes.ts";
+ import { bindThreadLogCapProvider } from "./thread-log-rotation.ts";
+ import { listenWebhookIngress, type WebhookIngress } from "./webhook-ingress.ts"; import { createBotApiHost } from "./bot-api-host.ts"; import { BOT_API_PARTS, BOT_API_REFUSAL, BOT_API_TOOLS, botApiRouteRefused } from "./bot-api-fence.ts";
+@@ -2980,7 +2981,7 @@ function previewSystemPrompt(bot: BotRecord) {
+       browser: previewPlan.computer === undefined ? false : previewPlan.browser,
+     }, { note: previewPlan.note, cloudHome: Boolean(CLOUD_HOME), ownComputer: CLOUD_HOME && agentsMounted && lendingEnabled() ? sharedComputers.known(CLOUD_HOME_LENDER) : undefined }) },
+     { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(agentsMounted && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER), CLOUD_PERSONAL) + firstHourHooks.prompt(bot.id, bot.threadId) : "" },
+-    { id: "composio", label: "Connected apps", text: caps?.composioMcp && bot.composio !== false && composio.configured(cfg) ? composioSystemPrompt(bot.connectorTools) + describeConnectorScopes(bot.connectorScopes) : "" },
++    { id: "composio", label: "Connected apps", text: caps?.composioMcp && bot.composio !== false && composio.configured(cfg) ? composioSystemPrompt(bot.connectorTools) + connectorAccountsPrompt(bot.connectorAccounts) + describeConnectorScopes(bot.connectorScopes) : "" },
+     { id: "email", label: "Email", text: caps?.emailMcp === true ? emailHost.prompt(bot) : "" },
+     ...phones.previewParts(bot, caps?.deviceMcp === true),
+     { id: "mcp", label: "MCP servers", text: caps?.customMcp ? customMcpPrompt(Object.keys(engineMcpServers(bot)), mcpServersHost.off(bot)) : "" }, { id: "to-connect", label: "Connections to make", text: cloudConnections.prompt(bot) },
+@@ -8367,7 +8368,7 @@ async function beginTurn(
+         { id: "team-computer", label: "Team computer", text: teamComputerPrompt(teamComputer) },
+         { id: "plan", label: "Surface", text: surfacePrompt({ computer: mountedComputer, browser: Boolean(integrations.browser) }, { pinned: plan.pinned, note: plan.note + vpsUnavailableNote + vmUpdateNote + (computerSkipped && plan.computer !== "off" ? computerSkippedNote(redactSecretsInText(computerSkipped)) : ""), canSelect: computerSelectionTurns.has(threadId), cloudHome: Boolean(CLOUD_HOME), botOpened: plan.botOpened, ownComputer: CLOUD_HOME && integrations.agents && lendingEnabled() ? sharedComputers.known(CLOUD_HOME_LENDER) : undefined }) },
+         { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(Boolean(integrations.agents) && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER), CLOUD_PERSONAL) + firstHourHooks.prompt(bot.id, threadId) : "" },
+-        { id: "composio", label: "Connected apps", text: integrations.composio ? composioSystemPrompt(liveBot?.connectorTools ?? bot.connectorTools) + describeConnectorScopes((liveBot ?? bot).connectorScopes) : "" },
++        { id: "composio", label: "Connected apps", text: integrations.composio ? composioSystemPrompt(liveBot?.connectorTools ?? bot.connectorTools) + connectorAccountsPrompt((liveBot ?? bot).connectorAccounts) + describeConnectorScopes((liveBot ?? bot).connectorScopes) : "" },
+         { id: "mcp", label: "MCP servers", text: customMcpPrompt(Object.keys(integrations.custom ?? {}), mcpServersHost.off(bot)) }, { id: "to-connect", label: "Connections to make", text: cloudConnections.prompt(liveBot ?? bot, lentMcp.lines(liveBot ?? bot, { botId: bot.id, threadId, generation: dispatchClaimId })) + teamConnections.prompt(threadId, dispatchClaimId, integrations) },
+         { id: "browser", label: "Browser", text: integrations.browser ? browserPromptFor(bot, Boolean(integrations.agents)) : "" },
+         { id: "data", label: "Data", text: integrations.data ? BUILT_IN_DATA_SYSTEM_PROMPT : "" },
+@@ -9508,7 +9509,7 @@ const webhooks = new WebhookManager({
+   }, ...createWebhookRoomPost({ store, cfg, roomTalks }) });
+ const webhookRequests = new WebhookRequestService({ store, webhooks, botName: (botId) => store.bot(botId)?.name ?? "the bot" }); const botApi = createBotApiHost({ store, startTurn, threadBusy, canStart: canAdmitDirectTurn, canConfine: (botId) => registry.get(store.bot(botId)?.modelSelection.instanceId ?? "")?.adapter.capabilities.guestTurns === "confined", discard: (botId, threadId) => { store.deleteTask(botId, threadId); }, included: () => !cloudPlanTier.starter(), opened: (threadId) => { if (CLOUD_OWNER_KEY) threadStarters.set(threadId, CLOUD_OWNER_KEY); }, hooksBaseUrl: () => webhookIngressStatus().baseUrl, manageRefusal: (auth, botId) => auth.scopes.includes("admin") || (CLOUD_TEAM && levelOf(auth, botId) === "edit") ? null : refusalFor(store.bot(botId)?.name ?? "this bot", "edit").error, claimRequest: () => { cloudPower?.arrived("/hooks", {}); moveFreeze.assertTurns(); return workspaceMaintenance.request(); }, record: (auth, row) => appendAdminAction(DATA_DIR, { ...row, actor: decisionActorFor(auth) }) });
+ const appTriggers = createAppTriggerHost({ store, webhooks, webhookBase: () => webhookIngressStatus().baseUrl, routines: () => routines!, botState: unattendedDispatchState, timeZone: routineTimeZone, emit: broadcast, connectionMode: () => composio.connectionMode(cfg),
+-  access: composio.brokerAccess, connectedApps: () => composio.connectedServices(cfg), visibleBot: (auth, botId) => visibleTo(viewerFor(auth)).bot(botId),
++  access: composio.brokerAccess, connectedApps: () => composio.connectedServices(cfg), accountChoice: (botId, app) => accountChoiceFor(accountRulesFor(botId, store.bots), app), visibleBot: (auth, botId) => visibleTo(viewerFor(auth)).bot(botId),
+   audit: (row) => appendDecision(DATA_DIR, { ...row, decision: "auto-approved", source: "routine" }) });
+ tieAutomationsToBots(store, { routines: routines!, webhooks, apps: appTriggers.manager, waits: botWaits });
+ ROUTES.push(appTriggers.routes); ROUTES.unshift(createMoveFreezeRoutes({ freeze: moveFreeze, automationsOff: () => switchAutomationsOff({ routines: () => routines, calls: () => calendarCalls, webhooks: () => webhooks, appEvents: () => appTriggers.manager, waits: () => botWaits }), restart: () => { restartRequested = true; gracefulShutdown(); }, busy: createMoveWaits({ bots: () => store.bots, rooms: () => store.groups, answering: (id) => watchdog.answering(id), turn: botHasActiveTurn, runs: () => routines?.listRuns() ?? [], roomWorking: (id) => { const group = store.group(id); return Boolean(group && groupIsWorking(group)); }, handoffs: () => coordinator.active(), exists: (node) => !(!node.parentId && node.groupId ? roomRootProblem(node) : roomHandoffProblem(node)), signingIn: () => providerAuthSessions.active }) }));
+@@ -14490,10 +14491,28 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
+           dispatchRefusal = text;
+           throw new Error(text);
+         };
++        // Per-bot accounts: the call leaves with the account this bot is assigned, or not at all. No rule, no change.
++        const accountRules = accountRulesFor(currentSender.id, store.bots);
++        let relayed: typeof body = body;
++        if (accountRules) {
++          const decided = await applyAccountRules(body, accountRules,
++            () => recentAccountInventory(actor.access ? `${actor.access.url}\0${actor.access.token}` : "server", () => composio.connectedServices(cfg, actor.access)),
++            serviceSlugs.length ? serviceSlugs : await composio.connectedServiceSlugs(cfg, actor.access));
++          if (!decided.ok) {
++            appendDecision(DATA_DIR, {
++              threadId: internalCapability.threadId, botId: currentSender.id, botName: currentSender.name,
++              tool: typeof rpcParams?.name === "string" ? rpcParams.name : "tools/call", summary: "connected account not allowed for this bot",
++              decision: "auto-denied", source: "connector-scope", rule: "connectorAccounts",
++            });
++            return refuseOutbound(decided.text);
++          }
++          relayed = decided.payload as typeof body;
++        }
++        const accountRulesKey = JSON.stringify(accountRules);
+         let upstream: Awaited<ReturnType<typeof composio.relayMcp>>;
+         try { upstream = await composio.relayMcp(
+           cfg,
+-          body,
++          relayed,
+           Array.isArray(req.headers["mcp-session-id"])
+             ? req.headers["mcp-session-id"][0]
+             : req.headers["mcp-session-id"],
+@@ -14507,6 +14526,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
+                 (call.kind === "unrecognized" && fresh.connectorTools !== undefined)) {
+               refuseDispatch("This bot's connected-app permissions changed. The call was not run.");
+             }
++            if (JSON.stringify(accountRulesFor(fresh.id, store.bots)) !== accountRulesKey) refuseDispatch("This bot's connected accounts changed. The call was not run.");
+             const reservedDrafts = internalCapability.gmailDrafts ??= new Set();
+             const nextDrafts = new Set(reservedDrafts);
+             const draftReservation = reserveGmailDrafts(connectorCalls, nextDrafts);
+diff --git a/server/inherited-apps.test.ts b/server/inherited-apps.test.ts
+index d77f3bae3..8c6d98f3b 100644
+--- a/server/inherited-apps.test.ts
++++ b/server/inherited-apps.test.ts
+@@ -15,6 +15,8 @@ describe("the connected apps a bot a Chief creates starts with", () => {
+     expect(appsFromCreator(chief, { createdBy: ADA, visibility: { people: [ADA] } })).toEqual(grants(chief));
+     expect(appsFromCreator({ connectorScopes: { apps: { slack: "read" } } }, {})).toEqual({ connectorScopes: { apps: { slack: "read" } } });
+     expect(appsFromCreator({}, {}), "a Chief on every app makes a bot on every app").toEqual({});
++    expect(appsFromCreator({ connectorAccounts: { github: { account: "ca_chief", exclusive: true } } }, {}), "and on the Chief's account, never another")
++      .toEqual({ connectorAccounts: { github: { account: "ca_chief", exclusive: true } } });
+   });
+ 
+   it("go only to a bot with the Chief's owner", () => {
+diff --git a/server/inherited-apps.ts b/server/inherited-apps.ts
+index 22684c3cf..74053dca3 100644
+--- a/server/inherited-apps.ts
++++ b/server/inherited-apps.ts
+@@ -1,18 +1,20 @@
+ import { botOwner, type OwnedBot } from "../shared/bot-owner.ts";
+ import type { ConnectorScopes } from "../shared/connector-scopes.ts";
+-import type { BotVisibility, ConnectorToolGrant } from "../shared/wire.ts";
++import type { BotVisibility, ConnectorAccountPin, ConnectorToolGrant } from "../shared/wire.ts";
+ 
+ /** What a bot may use of the connected apps: the switch, each app's tools and read or write level, its MCP servers. */
+ export interface AppGrants {
+   composio?: boolean;
+   connectorTools?: Record<string, ConnectorToolGrant>;
+   connectorScopes?: ConnectorScopes;
++  /** The account each app runs as: copied too, so the created bot reaches no account its Chief could not. */
++  connectorAccounts?: Record<string, ConnectorAccountPin>;
+   mcpServers?: string[];
+ }
+ 
+ type Placed = Pick<OwnedBot, "createdBy" | "reportsTo" | "defaultBot"> & { visibility?: BotVisibility };
+ 
+-const GRANTS = ["composio", "connectorTools", "connectorScopes", "mcpServers"] as const;
++const GRANTS = ["composio", "connectorTools", "connectorScopes", "connectorAccounts", "mcpServers"] as const;
+ const audience = (bot: Placed) => JSON.stringify(bot.visibility ?? "everyone");
+ 
+ /** The connected apps a bot a Chief creates starts with: a copy of the Chief's own grants and levels, never more.
+diff --git a/server/routes/bot-patch.ts b/server/routes/bot-patch.ts
+index bbbff5621..5ddea2e09 100644
+--- a/server/routes/bot-patch.ts
++++ b/server/routes/bot-patch.ts
+@@ -29,6 +29,7 @@ import { memberBotPatchViolation, requestSource, type RequestAuth } from "../req
+ import type { RoutineManager } from "../routines.ts";
+ import type { SessionRegistry } from "../sessions.ts";
+ import { parseConnectorTools } from "../connector-tools.ts";
++import { forgetAccountInventories, parseConnectorAccounts } from "../connector-accounts.ts";
+ import { sectionKey, type BotRecord, type GroupRecord, type Store, type TaskRecord } from "../store.ts";
+ import * as vps from "../vps-computer.ts";
+ import { vpsSshAliasForBot } from "../vps-hosts.ts";
+@@ -313,6 +314,21 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
+           patch.connectorTools = parsed.grants;
+         }
+       }
++      // null or {} clears the assigned accounts. An account must be one connected for that app here.
++      if (body.connectorAccounts !== undefined) {
++        const parsed = parseConnectorAccounts(body.connectorAccounts);
++        if (!parsed.ok) return json(res, 400, { error: parsed.error });
++        if (parsed.accounts) {
++          // An unreachable backend never blocks the patch: a call with an account that is not connected is refused.
++          const services = await composio.connectedServices(cfg).catch(() => null);
++          const unknown = services && Object.entries(parsed.accounts).find(([slug, pin]) =>
++            !Object.hasOwn(services, slug) || !services[slug]!.accounts.some((account) => account.id === pin.account));
++          if (unknown) return json(res, 400, { error: `connectorAccounts.${unknown[0]} names an account that is not connected for that app` });
++        }
++        // Stored as an own key even when cleared, so the patch below removes the old assignments.
++        patch.connectorAccounts = parsed.accounts;
++        forgetAccountInventories();
++      }
+       if (body.parkDirectMessages !== undefined) {
+         if (typeof body.parkDirectMessages !== "boolean") return json(res, 400, { error: "parkDirectMessages must be true or false" });
+         patch.parkDirectMessages = body.parkDirectMessages;
+diff --git a/server/store.ts b/server/store.ts
+index d1ae676e6..6bc6ccf11 100644
+--- a/server/store.ts
++++ b/server/store.ts
+@@ -36,6 +36,7 @@ import type {
+ } from "../shared/wire.ts";
+ import { movesThreadToTop, nextOpenThread } from "../shared/wire.ts";
+ import { parseConnectorTools } from "./connector-tools.ts";
++import { parseConnectorAccounts } from "./connector-accounts.ts";
+ import { sameModelSelection } from "../shared/thread-model.ts";
+ import { initialGreetingMessage } from "./initial-greeting.ts"; import { createDefaultBot, defaultBotRefusal, type DefaultBotIntro } from "./default-bot.ts";
+ import { appsFromCreator } from "./inherited-apps.ts";
+@@ -1500,6 +1501,11 @@ export class Store {
+       if (!parsed.ok) throw new Error(parsed.error);
+       patch = { ...patch, connectorTools: parsed.grants };
+     }
++    if (patch.connectorAccounts !== undefined) {
++      const parsed = parseConnectorAccounts(patch.connectorAccounts);
++      if (!parsed.ok) throw new Error(parsed.error);
++      patch = { ...patch, connectorAccounts: parsed.accounts };
++    }
+     if (Object.hasOwn(patch, "toolScope")) {
+       const parsed = parseToolScope(patch.toolScope);
+       if (!parsed.ok) throw new Error(parsed.error);
+diff --git a/shared/wire.ts b/shared/wire.ts
+index 040adb47e..76f3e43d8 100644
+--- a/shared/wire.ts
++++ b/shared/wire.ts
+@@ -266,6 +266,12 @@ export interface ConnectorToolGrant {
+   tools: "*" | string[];
+ }
+ 
++/** The connected account a bot uses for one app. `exclusive` keeps every other bot off that account. */
++export interface ConnectorAccountPin {
++  account: string;
++  exclusive?: true;
++}
++
+ /** Lowercased Composio service slug, e.g. `gmail`. */
+ export const CONNECTOR_SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,80}$/;
+ /** Composio tool names are upper-snake, e.g. `GMAIL_SEND_EMAIL`. */
+@@ -379,6 +385,9 @@ export interface WireBot extends DefaultBotFields, BotAccessFields {
+    * none. Grants never travel in shareable exports. */
+   connectorTools?: Record<string, ConnectorToolGrant>;
+   connectorScopes?: { apps: Record<string, "read" | "write"> };
++  /** The connected account this bot uses, by service slug. An app without an entry uses any account no other bot keeps
++   * to itself. Account IDs belong to this installation and never travel in exports. */
++  connectorAccounts?: Record<string, ConnectorAccountPin>;
+   outbound?: { policy: "ask" | "allow" };
+   /** Which of a paired phone's apps this bot may use; absent: every bot may use what the phone allows (shared/phone-apps.ts). */
+   phoneApps?: import("./phone-apps.ts").PhoneApps;
+diff --git a/src/components/bot-settings/AccessSection.tsx b/src/components/bot-settings/AccessSection.tsx
+index d42382cce..a6a8c0dab 100644
+--- a/src/components/bot-settings/AccessSection.tsx
++++ b/src/components/bot-settings/AccessSection.tsx
+@@ -24,6 +24,7 @@ import { ToolBudgetLine } from "./ToolBudgetLine";
+ import { useCloudPlan } from "../ProIntroduction";
+ import { xResearchAction } from "@/lib/cloud-plan";
+ import { useBotApps } from "./useBotApps";
++import { ConnectorAccountsControl } from "./ConnectorAccounts";
+ import {
+   classifyConnectorTool,
+   connectorServiceAccess,
+@@ -767,6 +768,14 @@ export function AccessSection({
+           <>
+             {!draft && <ConnectorScopesControl connectedSlugs={connectedSlugs} labels={appLabels} scopes={bot.connectorScopes} onChange={(connectorScopes) => patch({ connectorScopes })} />}
+             <ConnectorToolsGrants bot={bot} patch={patch} slugs={connectedSlugs} />
++            {!draft && <ConnectorAccountsControl
++              bot={bot} bots={state.bots} labels={appLabels}
++              onChange={(connectorAccounts) => patch({ connectorAccounts })}
++              onConnect={() => {
++                dispatch({ type: "toggleSettings", open: false });
++                dispatch({ type: "togglePlugins", open: true, surface: "apps" });
++              }}
++            />}
+           </>
+         )}
+         {connectedAppsEnabled && connectedAppsConfigured && (
+diff --git a/src/components/bot-settings/ConnectorAccounts.test.ts b/src/components/bot-settings/ConnectorAccounts.test.ts
+new file mode 100644
+index 000000000..b55bc5765
+--- /dev/null
++++ b/src/components/bot-settings/ConnectorAccounts.test.ts
+@@ -0,0 +1,50 @@
++import { describe, expect, it } from "vitest";
++
++import { accountRows, withAccount } from "./ConnectorAccounts";
++
++const services = {
++  github: { connected: true, accounts: [
++    { id: "ca_team", alias: "team", status: "ACTIVE" },
++    { id: "ca_milo", alias: "milo", status: "ACTIVE" },
++    { id: "ca_old", status: "EXPIRED" },
++  ] },
++  gmail: { connected: true, accounts: [{ id: "ca_mail", status: "ACTIVE" }] },
++  slack: { connected: false, accounts: [{ id: "ca_slack", status: "EXPIRED" }] },
++  notion: { connected: true },
++};
++const milo = { id: "milo", name: "Milo", connectorAccounts: { github: { account: "ca_milo", exclusive: true as const } } };
++const maus = { id: "maus", name: "MausBot" };
++
++describe("the accounts a bot's Access page offers", () => {
++  it("lists each app with a working account, and who keeps which account", () => {
++    const rows = accountRows(maus, [milo, maus], services, { github: "GitHub" });
++    expect(rows.map((row) => row.slug)).toEqual(["github", "gmail"]);
++    expect(rows[0]).toEqual({
++      slug: "github", label: "GitHub", value: "", exclusive: false, missing: false,
++      choices: [{ id: "ca_team", name: "team", keptFor: [] }, { id: "ca_milo", name: "milo", keptFor: ["Milo"] }],
++    });
++    expect(rows[1]!.choices).toEqual([{ id: "ca_mail", name: "ca_mail", keptFor: [] }]);
++  });
++
++  it("shows the bot's own assignment, and says when its account is gone", () => {
++    const own = accountRows(milo, [milo, maus], services)[0]!;
++    expect(own).toMatchObject({ value: "ca_milo", exclusive: true, missing: false });
++    expect(own.choices.find((choice) => choice.id === "ca_milo")!.keptFor, "its own account is not marked as another bot's").toEqual([]);
++    const expired = accountRows({ id: "x", connectorAccounts: { github: { account: "ca_old" } } }, [], services)[0]!;
++    expect(expired).toMatchObject({ value: "ca_old", missing: true });
++    expect(expired.choices.map((choice) => choice.id)).toContain("ca_old");
++    const removed = accountRows({ id: "x", connectorAccounts: { linear: { account: "ca_gone" } } }, [], services).find((row) => row.slug === "linear")!;
++    expect(removed).toMatchObject({ value: "ca_gone", missing: true, choices: [] });
++  });
++});
++
++describe("changing one app's account", () => {
++  it("sets, marks and clears it without touching the others", () => {
++    const current = { gmail: { account: "ca_mail" } };
++    expect(withAccount(current, "github", "ca_milo", false)).toEqual({ gmail: { account: "ca_mail" }, github: { account: "ca_milo" } });
++    expect(withAccount(current, "github", "ca_milo", true)).toEqual({ gmail: { account: "ca_mail" }, github: { account: "ca_milo", exclusive: true } });
++    expect(withAccount({ ...current, github: { account: "ca_milo", exclusive: true } }, "github", "", true)).toEqual(current);
++    expect(withAccount(undefined, "github", "", false)).toEqual({});
++    expect(current).toEqual({ gmail: { account: "ca_mail" } });
++  });
++});
+diff --git a/src/components/bot-settings/ConnectorAccounts.tsx b/src/components/bot-settings/ConnectorAccounts.tsx
+new file mode 100644
+index 000000000..0d7f1270b
+--- /dev/null
++++ b/src/components/bot-settings/ConnectorAccounts.tsx
+@@ -0,0 +1,125 @@
++import { useEffect, useState } from "react";
++
++import { preloadConnectedApps } from "@/lib/connected-apps";
++import { t } from "@/lib/i18n";
++import type { ConnectorStatus } from "@/lib/connector-status";
++import type { Bot } from "@/state/store";
++import type { ConnectorAccountPin } from "../../../shared/wire";
++
++export type ConnectorAccounts = Record<string, ConnectorAccountPin>;
++
++export interface AccountChoice {
++  id: string;
++  name: string;
++  /** Names of the other bots that keep this account to themselves. */
++  keptFor: string[];
++}
++
++export interface AccountRow {
++  slug: string;
++  label: string;
++  /** The assigned account's ID, or "" for any account. */
++  value: string;
++  exclusive: boolean;
++  /** The assigned account is no longer among the app's accounts. */
++  missing: boolean;
++  choices: AccountChoice[];
++}
++
++const ACTIVE = /^active$/i;
++
++/** One row per app that has a working account or an assignment: the accounts to choose from and who keeps which. */
++export function accountRows(
++  bot: Pick<Bot, "id" | "connectorAccounts">,
++  bots: ReadonlyArray<Pick<Bot, "id" | "name" | "connectorAccounts">>,
++  services: Record<string, ConnectorStatus>,
++  labels: Record<string, string> = {},
++): AccountRow[] {
++  const pins = bot.connectorAccounts ?? {};
++  const slugs = new Set(Object.keys(pins));
++  for (const [slug, status] of Object.entries(services)) if (status.accounts?.some((account) => ACTIVE.test(account.status))) slugs.add(slug);
++  return [...slugs].sort((a, b) => a.localeCompare(b)).map((slug) => {
++    const pin = Object.hasOwn(pins, slug) ? pins[slug] : undefined;
++    const accounts = (Object.hasOwn(services, slug) ? services[slug]!.accounts ?? [] : []).filter((account) => ACTIVE.test(account.status) || account.id === pin?.account);
++    const choices = accounts.map((account) => ({
++      id: account.id,
++      name: account.alias || account.id,
++      keptFor: bots.filter((other) => {
++        const theirs = other.id !== bot.id && other.connectorAccounts && Object.hasOwn(other.connectorAccounts, slug) ? other.connectorAccounts[slug] : undefined;
++        return theirs?.exclusive === true && theirs.account === account.id;
++      }).map((other) => other.name),
++    }));
++    return {
++      slug,
++      label: labels[slug] ?? slug,
++      value: pin?.account ?? "",
++      exclusive: pin?.exclusive === true,
++      missing: Boolean(pin) && !accounts.some((account) => account.id === pin!.account && ACTIVE.test(account.status)),
++      choices,
++    };
++  });
++}
++
++/** The assignments with one app changed; `account` "" lets the app use any account again. */
++export function withAccount(current: ConnectorAccounts | undefined, slug: string, account: string, exclusive: boolean): ConnectorAccounts {
++  const next = { ...current };
++  if (!account) delete next[slug];
++  else next[slug] = exclusive ? { account, exclusive: true } : { account };
++  return next;
++}
++
++export function ConnectorAccountsControl({ bot, bots, labels, onChange, onConnect }: {
++  bot: Bot;
++  bots: readonly Bot[];
++  labels?: Record<string, string>;
++  onChange: (accounts: ConnectorAccounts) => void;
++  onConnect: () => void;
++}) {
++  // The same 30-second inventory the apps list above reads.
++  const [services, setServices] = useState<Record<string, ConnectorStatus> | null>(null);
++  useEffect(() => {
++    let cancelled = false;
++    void preloadConnectedApps().then((inventory) => { if (!cancelled && inventory.authoritative) setServices(inventory.services); });
++    return () => { cancelled = true; };
++  }, []);
++  if (!services) return null;
++  const rows = accountRows(bot, bots, services, labels);
++  if (!rows.length) return null;
++  return <div className="mt-4" data-testid="connector-accounts">
++    <div className="text-[12px] font-medium text-ink">{t("botAccess.accounts.header")}</div>
++    <div className="mt-0.5 text-[12px] text-ink-secondary">{t("botAccess.accounts.hint", { name: bot.name })}</div>
++    <div className="mt-2 flex flex-col divide-y divide-hairline/20 rounded-lg bg-inset">
++      {rows.map((row) => <div key={row.slug} className="flex flex-wrap items-center justify-between gap-3 px-3 py-1.5">
++        <span className="min-w-0 text-[13px] text-ink">
++          {row.label}
++          {row.missing && <span className="ml-2 text-[11px] text-danger">{t("botAccess.accounts.missing")}</span>}
++        </span>
++        <div className="flex shrink-0 flex-wrap items-center gap-3">
++          {row.value && <label className="flex items-center gap-1.5 text-[12px] text-ink-secondary" title={t("botAccess.accounts.exclusiveHint")}>
++            <input
++              type="checkbox"
++              checked={row.exclusive}
++              onChange={(event) => onChange(withAccount(bot.connectorAccounts, row.slug, row.value, event.target.checked))}
++            />
++            {t("botAccess.accounts.exclusive")}
++          </label>}
++          <select
++            value={row.value}
++            aria-label={t("botAccess.accounts.selectLabel", { app: row.label })}
++            onChange={(event) => onChange(withAccount(bot.connectorAccounts, row.slug, event.target.value, event.target.value ? row.exclusive : false))}
++            className="max-w-[220px] rounded-md bg-card px-2 py-1 text-[12px] text-ink"
++          >
++            <option value="">{t("botAccess.accounts.any")}</option>
++            {row.value && !row.choices.some((choice) => choice.id === row.value) && <option value={row.value}>{row.value}</option>}
++            {row.choices.map((choice) => <option key={choice.id} value={choice.id}>
++              {choice.keptFor.length ? t("botAccess.accounts.keptFor", { account: choice.name, bots: choice.keptFor.join(", ") }) : choice.name}
++            </option>)}
++          </select>
++        </div>
++      </div>)}
++    </div>
++    <button type="button" onClick={onConnect} className="mt-2 text-[12px] text-ink-secondary underline hover:text-ink">
++      {t("botAccess.accounts.connectAnother")}
++    </button>
++  </div>;
++}
+diff --git a/src/components/bot-settings/useBotSettingsDerived.ts b/src/components/bot-settings/useBotSettingsDerived.ts
+index d10ed5bb3..768f01c2e 100644
+--- a/src/components/bot-settings/useBotSettingsDerived.ts
++++ b/src/components/bot-settings/useBotSettingsDerived.ts
+@@ -38,6 +38,7 @@ export type BotPatch = Partial<
+     | "chiefOfStaff"
+     | "managedSections"
+     | "composio"
++    | "connectorAccounts"
+     | "browser"
+     | "recordBrowserSteps"
+     | "mcpServers"
+diff --git a/src/locales/en.json b/src/locales/en.json
+index 676994cb6..0b239065e 100644
+--- a/src/locales/en.json
++++ b/src/locales/en.json
+@@ -6861,6 +6861,15 @@
+   "botAccess.always.remove": "Remove {entry} from always allowed",
+   "botAccess.always.removeButton": "Remove",
+   "botAccess.scopes.limited": "Only the apps allowed below, at the level set for each. Everything else is off for this bot.",
++  "botAccess.accounts.header": "Accounts",
++  "botAccess.accounts.hint": "Choose the account {name} uses for each app. With “Any account”, it can use every account that no other bot keeps to itself.",
++  "botAccess.accounts.any": "Any account",
++  "botAccess.accounts.exclusive": "Only this bot",
++  "botAccess.accounts.exclusiveHint": "No other bot can use this account.",
++  "botAccess.accounts.missing": "No longer connected",
++  "botAccess.accounts.selectLabel": "{app} account",
++  "botAccess.accounts.keptFor": "{account} (only {bots})",
++  "botAccess.accounts.connectAnother": "Connect another account",
+   "botAccess.scopes.unlimited": "No app-level limits. The tool grants below still apply.",
+   "botAccess.scopes.limitLabel": "Limit this bot to specific apps",
+   "botAccess.scopes.empty": "No apps connected yet. Connect one, then allow it here.",
+diff --git a/src/state/bot-patch-queue.ts b/src/state/bot-patch-queue.ts
+index db30ec53e..8ae4308f6 100644
+--- a/src/state/bot-patch-queue.ts
++++ b/src/state/bot-patch-queue.ts
+@@ -36,6 +36,7 @@ export type BotUpdatePatch = Partial<
+     | "pinnedMessageId"
+     | "chiefOfStaff"
+     | "composio"
++    | "connectorAccounts"
+     | "browser"
+     | "browserProfile"
+     | "memoryUpkeep"
+@@ -234,7 +235,8 @@ export function createBotPatchQueue(options: BotPatchQueueOptions): BotPatchQueu
+       // Execution-boundary edits skip the debounce: work must never start under stale permissions or revoked tools.
+       const immediate = Object.prototype.hasOwnProperty.call(patch, "approvalMode") ||
+         Object.prototype.hasOwnProperty.call(patch, "modelSelection") ||
+-        Object.prototype.hasOwnProperty.call(patch, "connectorTools");
++        Object.prototype.hasOwnProperty.call(patch, "connectorTools") ||
++        Object.prototype.hasOwnProperty.call(patch, "connectorAccounts");
+       if (immediate) {
+         if (entry.timer !== null) clearTimeout(entry.timer);
+         entry.timer = null;
+diff --git a/src/state/store.tsx b/src/state/store.tsx
+index 90b09a9b2..4d07d5c71 100644
+--- a/src/state/store.tsx
++++ b/src/state/store.tsx
+@@ -320,7 +320,7 @@ export interface Bot extends DefaultBotFields, Pick<WireBot, "mascotFaceColor" |
+   createdBy?: string; reportsTo?: string;
+   composio?: boolean;
+   connectorTools?: Record<string, ConnectorToolGrant>;
+-  connectorScopes?: { apps: Record<string, "read" | "write"> }; phoneApps?: import("../../shared/phone-apps").PhoneApps;
++  connectorScopes?: { apps: Record<string, "read" | "write"> }; connectorAccounts?: Record<string, import("../../shared/wire").ConnectorAccountPin>; phoneApps?: import("../../shared/phone-apps").PhoneApps;
+   outbound?: { policy: "ask" | "allow" };
+   fallback?: Array<{ instanceId: string; model: string }>;
+   browser?: boolean;
+-- 
+2.43.0
+
