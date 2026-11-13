@@ -3,6 +3,7 @@
 import { existsSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 
+import { botOwner } from "../../shared/bot-owner.ts";
 import { canUseMcpServer } from "../../shared/tool-scope.ts";
 import { DATA_DIR, type AppConfig } from "../config.ts";
 import { appendDecision } from "../decision-log.ts";
@@ -91,6 +92,7 @@ export function createMcpChat(deps: McpChatDeps) {
       fullAccess: () => fullAccessForSource(sender.id, threadId),
       guestDriven: () => cloudGuestDriven(threadId),
       teamAdmin: () => teamConnections.actsForAdmin(threadId, generation),
+      ownerAsks: () => { const owner = botOwner(sender); return owner !== null && teamConnections.actsForMember(threadId, generation, owner); },
       canUse: (name) => canUseMcpServer(sender.toolScope, name),
       config: deps.mcpConfig(), cfg: () => cfg, personal: () => teamConnections.personMcp(),
       authState: (name, url) => mcpOAuth.authState(name, url),

@@ -61,7 +61,7 @@ export function createSecretCardRoutes(deps: SecretCardRouteDeps): RouteHandler 
       if (refusal) return json(res, 403, refusal);
       const result = secretMessage(m[1]!, threadId, m[2]!)?.secret?.delivery === "email"
         ? await deps.cards.saveEmailSecret(m[1]!, threadId, m[2]!, fields)
-        : deps.cards.saveCustomSecret(m[1]!, threadId, m[2]!, fields.value);
+        : await deps.cards.saveCustomSecret(m[1]!, threadId, m[2]!, fields.value);
       return json(res, result.status, result.body);
     }
     // An HPKE envelope bound to the paired device, bot, task, card and target; only the embedded Electron server holds the key to open it.

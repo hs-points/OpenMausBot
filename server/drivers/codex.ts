@@ -3,7 +3,7 @@ export { managedCodexArgs, endpointCodexArgs } from "./codex-endpoint-config.ts"
 import { codexActionFailure } from "./codex-action-notice.ts";
 import { codexToolSurfaceArgs } from "./codex-tool-surface.ts";
 import { codexShellDisabled, GUEST_CONFINED_CODEX_ARGS } from "./codex-guest.ts";
-import { TEAM_TOOLS_FAILED, teamToolsFailed } from "./team-tools.ts";
+import { COMPUTER_TOOLS_FAILED, computerToolsFailed, TEAM_TOOLS_FAILED, teamToolsFailed } from "./team-tools.ts";
 import { enabledMcpMounts, mcpStartupTracker, supportsMcpStartup } from "./codex-mcp-startup.ts";
 import { boxProxyEnvNames, type McpApprovalMode, mountMcpServer } from "./codex-mcp-mount.ts";
 import { reportUnsupportedCalls, rolloutMark, type RolloutMark } from "./codex-unsupported-calls.ts";
@@ -63,11 +63,9 @@ import { classifyResumeFailure, mayReplay, rebuiltSessionNotice, recoveryPromptF
 import { extractMcpImages } from "../mcp-tool-images.ts"; import { codexImageInputs, withoutInlineImages } from "./codex-images.ts";
 import { parseProtocolAskQuestions, questionChoices } from "../../shared/ask-question.ts";
 import { codexQuestionReply, openAsyncQuestion, type CodexAsk } from "./codex-questions.ts";
-import { codexReleaseUpdate, codexUpdateCommand } from "./codex-update.ts";
-export { codexUpdateCommand };
+import { codexReleaseUpdate, codexUpdateCommand } from "./codex-update.ts"; export { codexUpdateCommand };
 import { effectiveApprovalPolicy, effectiveApprovalsReviewer } from "./codex-approval-config.ts"; import { AGENTS_TOOL_TIMEOUT_SECONDS } from "./agents-tool-limit.ts"; import { COMPUTER_PROXY_TIMEOUT_MS } from "../harness-budget.ts";
-import { canUseMcpServer } from "../../shared/tool-scope.ts";
-import { assertToolScopeSupported } from "../../shared/tool-scope-support.ts";
+import { canUseMcpServer } from "../../shared/tool-scope.ts"; import { assertToolScopeSupported } from "../../shared/tool-scope-support.ts";
 import { appMountFor, gateServer, mcpStdioServer } from "../mcp-gate-config.ts"; import { OWN_APPS_SERVER } from "../../shared/own-apps.ts";
 import { CALL_TOOL, DESCRIBE_TOOL, SEARCH_TOOL, directoryCallTarget } from "../mcp-directory.ts"; import { codexCommandOutput, codexPatchProgress } from "./tool-progress.ts";
 
@@ -1015,6 +1013,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         // MCP servers start with the thread, before it has an id; this process serves this turn alone.
         if (msg.method === "mcpServer/startupStatus/updated") {
           mcpStartup.record(p);
+          if (computerToolsFailed(p, selectedMcp)) { emit({ ...base(threadId, turnId), type: "runtime.error", message: COMPUTER_TOOLS_FAILED }); void settle(false, "computer_unavailable"); return; }
           if (!teamToolsNoticed && teamToolsFailed(p)) {
             teamToolsNoticed = true;
             emit({ ...base(threadId, turnId), type: "runtime.notice", message: TEAM_TOOLS_FAILED });

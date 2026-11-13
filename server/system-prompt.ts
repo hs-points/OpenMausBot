@@ -132,7 +132,7 @@ const COMPUTER_PARAGRAPH: Record<ComputerPromptKind, string> = {
     " You have a shared, isolated Cua sandbox: a Linux desktop in a container on this machine. Only /home/cua/workspace is durable; save downloads, repositories, working files, and browser profiles there because everything else inside the VM is disposable. No other host folder is mounted. Run every command with vm_exec, which returns the exit code and the output as text; do not type commands into a terminal window and read screenshots. Create files there with vm_exec too (a shell heredoc or a script it runs); your host file tools cannot reach the VM. To give the user a file you made there (a report, image, audio, video, spreadsheet or slides), call attach_file with its path once it is saved; it reports an error if the file is missing. A path inside the VM cannot be opened from chat, so do not paste one as a link. Use the computer tools for the desktop, accessibility and windows. Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and work carefully." + SANDBOX_DESKTOP_INPUT,
   box: " You control the assigned cloud computer. Inspect it with screenshots; click coordinates refer to the full image. Use the advertised computer tools for desktop actions and shell commands.",
   vps:
-    " You have your own self-hosted remote Linux computer through the official Cua tools. This is the user's own VPS; using it does not require a Boat API key. Its filesystem is disposable: everything on it is wiped whenever its container is recreated, so keep long-lived work somewhere durable — push it to a remote, or hand the results back in chat — instead of leaving it only on that computer. Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and act carefully." + SANDBOX_DESKTOP_INPUT,
+    " You have your own self-hosted remote Linux computer through the official Cua tools. This is the user's own VPS; using it does not require a Boat API key. Its filesystem is disposable: everything on it is wiped whenever its container is recreated, so keep long-lived work somewhere durable — push it to a remote, or hand the results back in chat — instead of leaving it only on that computer. Run every shell command there with vm_exec: it runs inside that computer as the desktop user, opens no window, and returns the exit code and output as text. Never open a terminal window to run commands. Inspect the desktop state before acting, prefer accessibility targets over raw coordinates, and act carefully." + SANDBOX_DESKTOP_INPUT,
   local:
     " You can act on the user's computer through the computer tools. Discover the target app/window and inspect its state first. Prefer window-targeted accessibility actions with background delivery so the user can keep working in another app; do not bring OpenMausBot or another app to the front just to inspect it. Use the dedicated browser tools for browser work when available, keeping the user's intended browser profile/account, and OpenMausBot's configuration/proposal tools for supported bot setup rather than clicking through this app. Full-desktop input, app activation, and foreground delivery can move the real cursor, change focus, or switch desktops: use them only when the user asked for foreground control or agrees after background control reports it cannot perform the action. Do not silently retry a background refusal as foreground input, including through shell scripts, AppleScript/System Events, or another automation tool. If a background action unexpectedly changes focus, report it and stop that route rather than continuing to interrupt the user. Never promise that arbitrary desktop actions can run in the background.",
 };
@@ -158,10 +158,14 @@ export { syncedFolders } from "./cloud-sync-store.ts";
 export const CLOUD_ENGINES_HERE = " The AIs bots run on (Claude, Codex, Cursor and the rest) run here, on My Cloud, not on their computer or their cloud computer."
   + " If one needs installing or signing in, tell them to choose it in the model picker: its card does that here, with a sign-in link they open on any device."
   + " Never tell them to run an AI's install or sign-in command on their own computer, and never run one on their cloud computer yourself: neither signs in the AIs here.";
+/** A coding cloud computer (bot.vpsComputer.codingTools): AI CLIs there are the person's own tools, not the AIs bots run on. */
+export const CLOUD_ENGINES_HERE_CODING = " The AIs bots run on (Claude, Codex, Cursor and the rest) run here, on My Cloud, not on their computer or their cloud computer."
+  + " If one needs installing or signing in for you, tell them to choose it in the model picker: its card does that here, with a sign-in link they open on any device."
+  + " Their cloud computer is a coding machine: installing, updating and signing in AI command-line tools there (Claude Code, Codex, gh and the like) is allowed when they ask, and they run on that computer only; they never sign in the AIs here.";
 
 /** `asks`: the person's own Cloud, whose bots ask them to turn on what their computer doesn't give now (ask_for_computer). */
 export function cloudHomePrompt(sharedComputerTools: boolean, synced: ReadonlyArray<{ computerName: string; pcPath: string; cloudPath: string }> = [],
-  lent: ReadonlyArray<{ name: string; platform: "darwin" | "win32" | "linux" | null }> = [], asks = false): string {
+  lent: ReadonlyArray<{ name: string; platform: "darwin" | "win32" | "linux" | null }> = [], asks = false, codingComputer = false): string {
   const { theirs, device } = theirComputer(lent);
   const unavailable = asks
     ? ` If it isn't online, or doesn't lend what you need (its apps and screen, its files, running commands), call ask_for_computer with what you want to do and why: it shows them one card with a one-tap Turn on, and you carry on once it's on. Don't explain the fix yourself, and never do it on their cloud computer or in the built-in browser instead unless they ask you to.`
@@ -172,7 +176,7 @@ export function cloudHomePrompt(sharedComputerTools: boolean, synced: ReadonlyAr
     : ` You cannot see or use ${theirs}, its screen or its files from here. If they ask for something on it, say so in one sentence.`)
     + (asks ? " For work that doesn't need their own computer, use what works here:" : " Offer what works here:")
     + " the built-in browser and their cloud computer, a desktop in the cloud. Call it their cloud computer, as the app does. Never ask them to set up this computer or a Local VM; neither exists here."
-    + CLOUD_ENGINES_HERE
+    + (codingComputer ? CLOUD_ENGINES_HERE_CODING : CLOUD_ENGINES_HERE)
     + syncedFoldersPrompt(synced);
 }
 

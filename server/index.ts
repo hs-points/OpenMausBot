@@ -45,7 +45,6 @@ import {
 import { createApprovalModeSupport } from "./harness-capabilities.ts";
 import { escapeAttribute } from "../src/lib/composer-attachments.ts";
 import { isPendingSignInRequest, normalizeSignInSite, signInOutcome, signInResumePrompt } from "../shared/sign-in-request.ts";
-
 import { createRoomTurnLevels } from "./room-turn-level.ts";
 import { createSignInSettle } from "./host/sign-in-settle.ts"; import { createPersonLanguages, THIS_COMPUTER } from "./host/person-languages.ts"; import "./server-line-packs.ts"; import { conversationLanguage, serverLine, setConversationLanguage } from "./server-lines.ts";
 import { RoomMemberLock } from "./room-member-lock.ts";
@@ -236,7 +235,7 @@ import { createOneOnOneGoals } from "./host/one-on-one-goals.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { openCodeProviderKeysAllowed, setOpenCodeProviderKeyPolicy } from "./drivers/acp/opencode-go.ts";
-import { liveAppRows, openCardRows, readMessageText, recallMessages, recentMessages, closeMessageSearch, closeMessageDb, chatFollowups, cancelledChatFollowup, settleChatFollowups, threadsReferencing, logNotification, lastRowAt, threadsWithCardsSince } from "./message-db.ts";
+import { liveAppRows, openCardRows, readMessageText, recallMessages, recentMessages, closeMessageSearch, closeMessageDb, chatFollowups, cancelledChatFollowup, threadsReferencing, logNotification, lastRowAt, threadsWithCardsSince } from "./message-db.ts";
 import { briefCrossingLabel, claimRecallCrossings, recallCrossingLabel } from "./recall-disclosure.ts";
 import { parseSince, parseUntil, recentWork, recentWorkPrompt, turnOutcomeLine } from "./recent-work.ts";
 import { chiefEscalationsEnabled, NEEDS_INPUT_GATE, peerApprovalGate, RAISED_GATE } from "./escalations.ts";
@@ -434,7 +433,7 @@ import { createLoopGuard, loopGuardSettings } from "./host/loop-guard.ts"; impor
 import { claudeUserSkillsEnabled, settingsTurnFields } from "./turn-settings.ts";
 import { addHeldSecretScrubber, redactSecretsInText, scrubHeldSecrets } from "./redact.ts";
 import * as vps from "./vps-computer.ts";
-import { vpsConfigForBot, vpsSshAliasForBot } from "./vps-hosts.ts";
+import { vpsCodingComputer, vpsConfigForBot, vpsSshAliasForBot } from "./vps-hosts.ts";
 import { ROUTINE_RESTARTED, RoutineManager, type Routine, type RoutineRun, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts"; import { routineModelRefusal, routineThreadModel, type RoutineModelChecks } from "./routine-input.ts"; import { routineRunsFor } from "./routine-run-window.ts"; import { batchSaves } from "./save-batch.ts";
 import { CalendarCallManager, type CalendarCall } from "./calendar-calls.ts";
 import { BROWSER_UPLOAD_TOOL, browserRuntimeEnv } from "./browser-runtime.ts";
@@ -487,6 +486,7 @@ import type { WebhookTrigger } from "../shared/webhooks.ts";
 import { AGENTS_NODE_FLAG, SPAWNED_PROXIES } from "./proxy-paths.ts";
 import { agentsProxyLaunch, agentsToolBridgeEnv, applyAgentsBridge, bridgedToolTitle, turnEngine } from "./agents-bridge-switch.ts"; import { agentsServerEnv, COMPUTER_OFF_REFUSAL, computerPickRefusal, directTurnKind, roomSkillsRefusal, type TurnKind } from "./agents-turn.ts";
 import { harnessMcpTokenEnv } from "./harness-mcp-token.ts";
+import { boxedComputerProxy, serveBoxedComputerCall, type BoxedComputerConnection, type McpServer } from "./boxed-computer-bridge.ts";
 import {
   loadBundledSkills,
   loadUserSkills,
@@ -580,8 +580,9 @@ import { PhoneSecretBridge, PhoneSecretSubmissionRegistry } from "./phone-secret
 // Keep these two last, so loading the route table leaves module start-up order as is.
 import { gzipTunnelReplies, json, onJsonBody, parsedBodyOf, readBody } from "./harness/http.ts";
 import { holdBodyDeadline } from "./body-deadline.ts";
-import { createNoAiNotice } from "./host/no-ai-notice.ts"; import { PASS, ROUTES, dispatchRoutes } from "./routes/table.ts"; import { createSecretCards } from "./host/secret-cards.ts"; import { createInternalCredentialRequestRoutes, createSecretCardRoutes } from "./routes/secret-cards.ts"; import { applyIncludedPagesMessage } from "./pages/access.ts"; import { createPublishedPages } from "./pages/service.ts"; import { createInternalToolRoutes } from "./routes/internal-tools.ts"; import { createHelperSuggestionRoutes } from "./routes/helper-suggestion.ts"; import { createXConnectorRoutes } from "./routes/x-connector.ts"; import { createMoveFreeze, switchAutomationsOff } from "./move-freeze.ts"; import { createMoveFreezeRoutes } from "./routes/move-freeze.ts"; import { createMoveWaits } from "./move-waits.ts"; import { assertBotHere, createBotMoves } from "./bot-moves.ts"; import { createBotMoveRoutes } from "./routes/bot-moves.ts"; import { createTeamMoveIn, moveInRefusal } from "./team-move-in.ts";
+import { createNoAiNotice } from "./host/no-ai-notice.ts"; import { PASS, ROUTES, dispatchRoutes } from "./routes/table.ts"; import { createSecretCards, vpsTurnVm } from "./host/secret-cards.ts"; import { vpsThreadComputers, vpsWriteSecretFile } from "./vps-secret-file.ts"; import { createInternalCredentialRequestRoutes, createSecretCardRoutes } from "./routes/secret-cards.ts"; import { applyIncludedPagesMessage } from "./pages/access.ts"; import { createPublishedPages } from "./pages/service.ts"; import { createInternalToolRoutes } from "./routes/internal-tools.ts"; import { createHelperSuggestionRoutes } from "./routes/helper-suggestion.ts"; import { createXConnectorRoutes } from "./routes/x-connector.ts"; import { createMoveFreeze, switchAutomationsOff } from "./move-freeze.ts"; import { createMoveFreezeRoutes } from "./routes/move-freeze.ts"; import { createMoveWaits } from "./move-waits.ts"; import { assertBotHere, createBotMoves } from "./bot-moves.ts"; import { createBotMoveRoutes } from "./routes/bot-moves.ts"; import { createTeamMoveIn, moveInRefusal } from "./team-move-in.ts";
 import { createHostedSlackRoutes } from "./routes/hosted-slack.ts";
+import { relayTokenStatus } from "./hsp-relay-token.ts";
 import { createBotPresetRoutes } from "./routes/bot-presets.ts"; import { createWorkspaceBannerRoutes, workspaceBannerStore, workspaceBannerSummary } from "./routes/workspace-banner.ts";
 import { createBotMemoryRoutes } from "./routes/bot-memory.ts";
 import { createBotCreateRoutes } from "./routes/bots-create.ts";
@@ -600,6 +601,13 @@ import { createInternalSignInRoutes } from "./routes/sign-in.ts";
 import { createInternalMcpRoutes } from "./routes/internal-mcp.ts";
 import { createInternalThreadRoutes } from "./routes/internal-threads.ts";
 import { createBrowserEvidenceRoutes } from "./routes/browser-evidence.ts";
+import { createTeachRecordingRoutes } from "./routes/teach-recording.ts";
+import { createTeachTargets } from "./host/teach-targets.ts";
+import { recoverInterruptedFollowups } from "./host/boot-followups.ts";
+import { createChannelMembers } from "./host/channel-members.ts";
+import { createBotComputerAccessRoutes } from "./routes/bot-computer-access.ts";
+import { TeachRecorder } from "./teach-recording.ts";
+import { localVmTeachComputer, vpsTeachComputer } from "./teach-desktop.ts";
 import { createSignInCardRoutes } from "./routes/sign-in-cards.ts";
 import { createInternalEscalateRoutes } from "./routes/internal-escalate.ts";
 import { createInternalChiefTeamRoutes } from "./routes/internal-chief-team.ts"; import { createInternalModelRoutes } from "./routes/internal-models.ts"; import { createOwnThreads } from "./host/own-threads.ts";
@@ -1509,8 +1517,8 @@ const managedPolicy = new ManagedDesktopPolicy({ onChange: () => {
   resyncOpenCodeProviderKeys();
 } });
 onKeyRejectionChange(() => { registry.forgetSnapshots(); broadcast({ kind: "config", ...configStatus() }); });
-function computerPlaceRefusal(kind: ComputerKind): { message: string; code: "cloud_home" | "managed_policy" } | undefined {
-  const cloudHome = CLOUD_HOME ? cloudHomePlaceRefusal(kind === "thisComputer" ? "local" : kind === "localVm" ? "vm" : "cloud") : undefined;
+function computerPlaceRefusal(kind: ComputerKind, { ownLocalVm = false } = {}): { message: string; code: "cloud_home" | "managed_policy" } | undefined {
+  const cloudHome = CLOUD_HOME && !(ownLocalVm && kind === "localVm") ? cloudHomePlaceRefusal(kind === "thisComputer" ? "local" : kind === "localVm" ? "vm" : "cloud") : undefined;
   if (cloudHome) return { message: cloudHome, code: "cloud_home" };
   const managed = managedPolicy.computerRefusal(kind);
   return managed ? { message: managed, code: "managed_policy" } : undefined;
@@ -1602,6 +1610,8 @@ type InternalCapability = {
   openedThreads: number;
   orphanExpiresAt: number;
   localVmTarget?: LocalVmTarget;
+  /** Boxed Local VM or VPS turn: the host runs the computer's MCP child; the box only holds the harness proxy. */
+  computerConnection?: BoxedComputerConnection;
   teamComputerId?: string;
   /** Set only by the harness at attach; null: mounted, and the first call creates or wakes the Boat. */
   boxId?: string | null;
@@ -2129,7 +2139,7 @@ function holderOfTurn({ threadId }: TurnOwner): { holder?: ComputerHolder; threa
 
 async function bindTurnComputer(owner: TurnOwner, resource: string, exclusive = false): Promise<void> {
   // Every computer claim passes here, so a disallowed kind is refused whichever path selected it.
-  const kind = computerKindForResource(resource), refusal = kind && computerPlaceRefusal(kind);
+  const kind = computerKindForResource(resource), refusal = kind && computerPlaceRefusal(kind, { ownLocalVm: true });
   if (refusal) throw Object.assign(new Error(refusal.message), { code: refusal.code });
   const active = () => activeInternalGenerationByThread.get(owner.threadId) === owner.generation &&
     turnResourceOwners.get(owner.threadId)?.generation === owner.generation;
@@ -2767,24 +2777,7 @@ function defaultsPresetFor(body: Record<string, unknown>, includeNotes: boolean)
   return { preset: built.value, skipped: [...skipped, ...built.skipped] };
 }
 
-function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | { ok: false; error: string } {
-  if (!Array.isArray(value)) return { ok: false, error: "memberIds must be a list of bot IDs" };
-  const invalidIndex = value.findIndex(
-    (id) => typeof id !== "string" || !id.trim() || !store.bot(id),
-  );
-  if (invalidIndex !== -1) {
-    return { ok: false, error: `unknown channel member: ${String(value[invalidIndex])}` };
-  }
-  const memberIds = [...new Set(value as string[])];
-  if (!memberIds.length) return { ok: false, error: "a channel needs at least one bot" };
-  if (memberIds.every((id) => store.bot(id)?.hidden)) {
-    return {
-      ok: false,
-      error: "a channel needs at least one active bot — every member given is archived",
-    };
-  }
-  return { ok: true, memberIds };
-}
+const { checkedMemberIds } = createChannelMembers({ store: { bot: (id) => store.bot(id) } });
 let bootSelection = { instanceId: "", model: "" }; // Settled by one tiny test message through each AI it could be (server/tested-ai.ts).
 const testedAi = createTestedAi({ engine: (instanceId) => registry.get(instanceId), store: () => store, threadBusy, context: selectionContext, changed: () => refreshUnsetModelSelections().then(() => broadcast({ kind: "config", ...configStatus() })),
   saved: () => [cfg.defaultModelSelection, cfg.newBotDefaults?.profile.modelSelection], hosted: () => Boolean(hostedModels), identity: (instanceId) => configIdentity(providerConfigs()[instanceId]), file: join(DATA_DIR, "providers", "ai-checks.json"), forBot: (selection) => withNewBotEffort(selection, cfg.newBots?.effort, registry.get(selection.instanceId)?.adapter.capabilities.effortLevels) });
@@ -2981,7 +2974,7 @@ function previewSystemPrompt(bot: BotRecord) {
       computer: previewPlan.computer && previewPlan.computer !== "off" && computerPromptKind ? previewPlan.computer : null,
       browser: previewPlan.computer === undefined ? false : previewPlan.browser,
     }, { note: previewPlan.note, cloudHome: Boolean(CLOUD_HOME), ownComputer: CLOUD_HOME && agentsMounted && lendingEnabled() ? sharedComputers.known(CLOUD_HOME_LENDER) : undefined }) },
-    { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(agentsMounted && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER), CLOUD_PERSONAL) + firstHourHooks.prompt(bot.id, bot.threadId) : "" },
+    { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(agentsMounted && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER), CLOUD_PERSONAL, vpsCodingComputer(bot)) + firstHourHooks.prompt(bot.id, bot.threadId) : "" },
     { id: "composio", label: "Connected apps", text: caps?.composioMcp && bot.composio !== false && composio.configured(cfg) ? composioSystemPrompt(bot.connectorTools) + describeConnectorScopes(bot.connectorScopes) : "" },
     { id: "email", label: "Email", text: caps?.emailMcp === true ? emailHost.prompt(bot) : "" },
     ...phones.previewParts(bot, caps?.deviceMcp === true),
@@ -4650,6 +4643,7 @@ function audienceChanged(): void {
 const upgrades = createUpgrades();
 const desktopViewer = createDesktopViewer({
   upgrades,
+  mayView: (auth, id) => id.startsWith("vps/") && Boolean(CLOUD_TEAM) && levelOf(auth, id.slice(4)) === "edit",
   target: (id) => {
     if (id.startsWith("vps/")) {
       const botId = id.slice(4);
@@ -5643,7 +5637,7 @@ function vpsThreadStarted(botId: string, threadId: string): void {
   activeVpsThreads.set(botId, threads);
 }
 function vpsThreadEnded(botId: string, threadId: string): void {
-  const threads = activeVpsThreads.get(botId);
+  vpsThreadComputers.delete(threadId); const threads = activeVpsThreads.get(botId);
   if (!threads) return;
   threads.delete(threadId);
   if (!threads.size) activeVpsThreads.delete(botId);
@@ -5819,12 +5813,32 @@ function cloudEngine(instance: ReturnType<typeof registry.get>, model?: string):
 /** The agent process holds only a turn-scoped capability naming this Boat, never a Boat credential. */
 function cloudComputerTools(botId: string, owner: TurnOwner, boxId: string | null): NonNullable<SendTurnInput["integrations"]>["localComputer"] {
   const control = controlIntegration(botId, owner.threadId, owner.generation, { boxId });
-  return {
-    command: process.execPath,
-    args: [SPAWNED_PROXIES.harnessMcp, "computer"],
-    env: { ...AGENTS_NODE_FLAG, OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`, [harnessMcpTokenEnv("computer")]: control.token },
-    platform: "linux",
-  };
+  return { ...computerProxy(control.token), platform: "linux" };
+}
+const computerProxy = (token: string) => boxedComputerProxy({ harnessMcp: SPAWNED_PROXIES.harnessMcp, nodeEnv: AGENTS_NODE_FLAG, port: PORT, token });
+
+function boxedComputerTools(control: { token: string }, server: () => McpServer, assertClaim: (capability: InternalCapability) => void) {
+  const capability = internalCapabilities.get(control.token);
+  if (!capability || capability.kind !== "computer") throw new Error("Computer capability was not created");
+  capability.computerConnection = { server, assertClaim: () => assertClaim(capability), calls: Promise.resolve() };
+  return computerProxy(control.token);
+}
+function localVmComputerTools(runtime: Runtime, control: { url: string; token: string }, target: LocalVmTarget) {
+  if (!botBox.enabled()) return containerComputerMcp(runtime, control, target);
+  return boxedComputerTools(control, () => containerComputerMcp(runtime, undefined, target), (capability) => {
+    const owner = localVmLeaseFor(target).current(localVmOwnerBusy);
+    if (localVmThreadTargets.get(capability.threadId)?.key === target.key && owner?.threadId === capability.threadId && owner.botId === capability.botId) return;
+    throw Object.assign(new Error("This turn no longer has its Local VM"), { status: 403 });
+  });
+}
+/** Bot box has no network and no ~/.ssh: the box gets the harness proxy and the host runs the VPS MCP child with this fixed alias and container. */
+function vpsComputerTools(vpsMcp: McpServer, control: { url: string; token: string }, resource: string) {
+  if (!botBox.enabled()) return { ...vpsMcp, env: { ...vpsMcp.env, OMB_CONTROL_URL: control.url, OMB_CONTROL_TOKEN: control.token } };
+  return boxedComputerTools(control, () => vpsMcp, (capability) => {
+    const held = turnComputerResources.get(capability.threadId);
+    if (held?.resource === resource && held.owner.generation === capability.generation) return;
+    throw Object.assign(new Error("This turn no longer has its VPS computer"), { status: 403 });
+  });
 }
 
 /** `askNow`: read at the first screen call (an Auto pin below Full access, checked live), so the person is asked once then. */
@@ -5842,6 +5856,9 @@ async function mountHostComputer(owner: TurnOwner, botId: string, providerSuppor
   return gatedLocalComputer(cua, controlIntegration(botId, owner.threadId, owner.generation, "this computer"), journal);
 }
 
+/** HSP: the VPS computer a turn mounted, so vm_exec can run commands there without a terminal window. */
+const vpsExecTargets = new Map<string, { generation: string; cfg: AppConfig; botId: string; container: string | undefined }>();
+
 /** Checked and started at dispatch, unlike the Boat: the VPS bridge execs into the container as soon as the engine launches and dies if it is not up. */
 async function mountBotVps(
   bot: BotRecord,
@@ -5852,8 +5869,9 @@ async function mountBotVps(
   const vpsResource = `computer:vps:${vpsSshAliasForBot(cfg, bot)}:${bot.id}`;
   const remote = await (opts.start ? vps.vpsComputerAction("provision", botVpsConfig, bot.id) : vps.inspectVpsForAuto(botVpsConfig, bot.id));
   if (!remote?.ready || !remote.sshAlias) return { problem: remote?.problem ?? null, reachable: remote?.daemonUp === true, outdated: vpsDesktopOutdated(remote) };
-  const targetCfg = { ...cfg, vps: { sshAlias: remote.sshAlias } };
+  const targetCfg = { ...cfg, vps: { ...botVpsConfig.vps, sshAlias: remote.sshAlias } };
   const vpsMcp = vps.vpsComputerMcp(targetCfg, bot.id, remote.container_id ?? undefined);
+  vpsExecTargets.set(owner.threadId, { generation: owner.generation, cfg: targetCfg, botId: bot.id, container: remote.container_id ?? undefined }); vpsThreadComputers.set(owner.threadId, { alias: remote.sshAlias, container: remote.container_id ?? vps.vpsContainerName(bot.id) });
   const vpsControl = controlIntegration(bot.id, owner.threadId, owner.generation);
   // Live frames only once this turn holds the desktop, or it would publish another turn's screen as its own.
   const vpsCapture = () => vps.vpsComputerScreenshot(targetCfg, bot.id);
@@ -5868,10 +5886,7 @@ async function mountBotVps(
     },
   });
   return {
-    integration: {
-      ...vpsMcp,
-      env: { ...vpsMcp.env, OMB_CONTROL_URL: vpsControl.url, OMB_CONTROL_TOKEN: vpsControl.token },
-    },
+    integration: vpsComputerTools(vpsMcp, vpsControl, vpsResource),
   };
 }
 
@@ -6038,7 +6053,7 @@ async function selectableComputers(bot: BotRecord) {
   const caps = instance?.adapter.capabilities;
   const off = bot.computer === "off";
   const toolsLeaveOut = computerToolsRefusal(bot.toolScope, "works-on", bot.name)?.message;
-  const surfaces = (["cloud", "vm", "local", "browser"] as const).filter(surface => !CLOUD_HOME || cloudHomeOffersPlace(surface));
+  const surfaces = (["cloud", "vm", "local", "browser"] as const).filter(surface => !CLOUD_HOME || cloudHomeOffersPlace(surface) || (surface === "vm" && bot.computer === "vm"));
   let ownDesktopAwaitsUpdate = false;
   return withoutHostWhileUpdating(await Promise.all(surfaces.map(async surface => {
     let ready = false;
@@ -6055,7 +6070,7 @@ async function selectableComputers(bot: BotRecord) {
           const status = canWorkOnCloud(cloudEngine(instance)) ? await vps.vpsComputerStatus(vpsConfigForBot(cfg, bot), bot.id) : null;
           ready = status?.ready === true;
           canStart = Boolean(status?.daemonUp && status.managed && status.container === "stopped" &&
-            status.image && status.imageMatches && status.network === "private" && status.mounts === "none" && status.security === "hardened");
+            status.image && status.imageMatches && status.network === "private" && vps.vpsMountsUsable(status.mounts) && status.security === "hardened");
           canCreate = Boolean(status?.configured && status.daemonUp && status.container === "missing");
           ownDesktopAwaitsUpdate ||= vpsDesktopOutdated(status);
           reason = status?.problem ? `${status.problem}${vpsDesktopOutdated(status) ? `. ${VPS_OUTDATED_HINT}` : ""}` : reason;
@@ -6435,7 +6450,8 @@ bus.subscribe((event: RuntimeEvent) => {
       if (event.itemType === "assistant_text") {
         pushAssistantText(event.text, event.turnId);
       } else if (event.itemType === "assistant_image") {
-        try {
+        // HSP: screenshots returned by computer/browser tools are working views, not replies; attaching them all flooded chats.
+        if (!event.fromTool) try {
           const decoded = decodeGeneratedImage(event.data);
           const saved = saveImage(decoded.bytes, decoded.mime);
           const key = turnAttachmentKey(event.threadId, event.turnId);
@@ -7967,7 +7983,7 @@ async function beginTurn(
       };
       const wantedKind = teamComputer ? "box" : wants === "local" ? "thisComputer" : wants === "vm" ? "localVm"
         : wants === "cloud" ? (cloudBackend === "vps" ? "vps" : "box") : undefined;
-      const placeRefusal = wantedKind && computerPlaceRefusal(wantedKind);
+      const placeRefusal = wantedKind && computerPlaceRefusal(wantedKind, { ownLocalVm: true });
       if (placeRefusal) skipComputer(Object.assign(new Error(placeRefusal.message), { status: 409, code: placeRefusal.code }));
       const namedPlace = teamComputer || wants === undefined || wants === "off" ? undefined : wants;
       const placeSource: PlaceSource | undefined = !namedPlace ? undefined
@@ -8121,7 +8137,7 @@ async function beginTurn(
         }
         try {
           if (lazyReadyVm) {
-            integrations.localComputer = containerComputerMcp(
+            integrations.localComputer = localVmComputerTools(
               lazyReadyVm.runtime,
               controlIntegration(bot.id, threadId, dispatchClaimId),
               localVmTarget,
@@ -8150,7 +8166,7 @@ async function beginTurn(
             return true;
           }
           const claimed = await claimAutoLocalVm(threadId);
-          integrations.localComputer = containerComputerMcp(
+          integrations.localComputer = localVmComputerTools(
             claimed.runtime,
             controlIntegration(bot.id, threadId, dispatchClaimId),
             claimed.target,
@@ -8381,7 +8397,7 @@ async function beginTurn(
         { id: "computer", label: "Computer", text: computerPrompt(computerPromptKind) },
         { id: "team-computer", label: "Team computer", text: teamComputerPrompt(teamComputer) },
         { id: "plan", label: "Surface", text: surfacePrompt({ computer: mountedComputer, browser: Boolean(integrations.browser) }, { pinned: plan.pinned, note: plan.note + vpsUnavailableNote + vmUpdateNote + (computerSkipped && plan.computer !== "off" ? computerSkippedNote(redactSecretsInText(computerSkipped)) : ""), canSelect: computerSelectionTurns.has(threadId), cloudHome: Boolean(CLOUD_HOME), botOpened: plan.botOpened, ownComputer: CLOUD_HOME && integrations.agents && lendingEnabled() ? sharedComputers.known(CLOUD_HOME_LENDER) : undefined }) },
-        { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(Boolean(integrations.agents) && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER), CLOUD_PERSONAL) + firstHourHooks.prompt(bot.id, threadId) : "" },
+        { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(Boolean(integrations.agents) && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER), CLOUD_PERSONAL, vpsCodingComputer(bot)) + firstHourHooks.prompt(bot.id, threadId) : "" },
         { id: "composio", label: "Connected apps", text: integrations.composio ? composioSystemPrompt(liveBot?.connectorTools ?? bot.connectorTools) + describeConnectorScopes((liveBot ?? bot).connectorScopes) : "" },
         { id: "mcp", label: "MCP servers", text: customMcpPrompt(Object.keys(integrations.custom ?? {}), mcpServersHost.off(bot)) }, { id: "to-connect", label: "Connections to make", text: cloudConnections.prompt(liveBot ?? bot, lentMcp.lines(liveBot ?? bot, { botId: bot.id, threadId, generation: dispatchClaimId })) + teamConnections.prompt(threadId, dispatchClaimId, integrations) },
         { id: "browser", label: "Browser", text: integrations.browser ? browserPromptFor(bot, Boolean(integrations.agents)) : "" },
@@ -9983,7 +9999,7 @@ async function runClaimedGroupMemberTurn(
   });
   const roomKind = roomTeamComputer ? "box" : roomPlan.computer === "local" ? "thisComputer" : readyBot.computer === "vm" ? "localVm"
     : roomPlan.computer === "cloud" ? (turnProvider(readyBot) === "vps" ? "vps" : "box") : undefined;
-  const roomPlaceRefusal = roomKind && computerPlaceRefusal(roomKind);
+  const roomPlaceRefusal = roomKind && computerPlaceRefusal(roomKind, { ownLocalVm: true });
   if (roomPlaceRefusal) throw Object.assign(new Error(roomPlaceRefusal.message), { code: roomPlaceRefusal.code });
   if (!roomTeamComputer && roomPlan.computer === "cloud") {
     const unsupported = cloudPlaceRefusal(cloudEngine(instance, readyBot.modelSelection.model), "room", readyBot.name)
@@ -10096,7 +10112,7 @@ async function runClaimedGroupMemberTurn(
       if (owner?.threadId !== threadId || owner.botId !== readyBot.id) {
         throw new Error("the Local VM lease expired while preparing the turn");
       }
-      integrations.localComputer = containerComputerMcp(
+      integrations.localComputer = localVmComputerTools(
         vm.runtime,
         controlIntegration(readyBot.id, threadId, internalGeneration, { localVmTarget: target }),
         target,
@@ -10200,7 +10216,7 @@ async function runClaimedGroupMemberTurn(
     { id: "computer", label: "Computer", text: computerPrompt(roomComputerPromptKind) },
     { id: "team-computer", label: "Team computer", text: teamComputerPrompt(roomTeamComputer) },
     { id: "plan", label: "Surface", text: surfacePrompt({ computer: roomTeamComputer ? "cloud" : roomVmTarget ? "vm" : surfaceOfComputerKind(roomComputerKind), browser: Boolean(integrations.browser) }, { note: roomPlan.note, cloudHome: Boolean(CLOUD_HOME), ownComputer: CLOUD_HOME && integrations.agents && lendingEnabled() ? sharedComputers.known(CLOUD_HOME_LENDER) : undefined }) },
-    { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(Boolean(integrations.agents) && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER), CLOUD_PERSONAL) : "" },
+    { id: "cloud-home", label: "My Cloud", text: CLOUD_HOME ? cloudHomePrompt(Boolean(integrations.agents) && lendingEnabled(), syncedFolders(DATA_DIR), sharedComputers.known(CLOUD_HOME_LENDER), CLOUD_PERSONAL, vpsCodingComputer(bot)) : "" },
     { id: "browser", label: "Browser", text: integrations.browser ? browserPromptFor(bot, Boolean(integrations.agents)) : "" },
     { id: "data", label: "Data", text: integrations.data ? BUILT_IN_DATA_SYSTEM_PROMPT : "" },
     { id: "email", label: "Email", text: instance.adapter.capabilities.emailMcp === true ? emailHost.prompt(readyBot) : "" },
@@ -11542,7 +11558,7 @@ function claimPhoneSecretBotDeletion(botId: string): (() => void) | null {
   };
 }
 
-const secretCards = createSecretCards({ store, cfg, botLogins, vaultStore: logins, phoneSecrets, phoneSecretSubmissions, connectorThread, answerCardNode, followCard: (threadId, from, to) => coordinator.followCard(threadId, from, to), threadLanguage, email: { connect: (request, reading) => emailService.connect(request, reading), refusal: () => emailService.status().reason, connected: (address) => { const one = emailService.store.get(address); return Boolean(one && !one.problem); }, sendingProblem: (address) => emailService.sendingProblem(address), account: (address) => emailService.status().accounts.find((one) => one.address.toLowerCase() === address.toLowerCase()), checkOutgoing: (address, fields) => emailService.checkOutgoing(address, fields), profileAddress: () => cfg.profile?.email?.trim() || undefined }, dataDir: DATA_DIR, providerKeysRefused: Boolean(hostedModels), layerFolder: (botId, threadId) => workspaceDir(teamHost.layer(botId, threadId)), turnVm: (threadId) => localVmThreadTargets.get(threadId)?.key });
+const secretCards = createSecretCards({ store, cfg, botLogins, vaultStore: logins, phoneSecrets, phoneSecretSubmissions, connectorThread, answerCardNode, followCard: (threadId, from, to) => coordinator.followCard(threadId, from, to), threadLanguage, email: { connect: (request, reading) => emailService.connect(request, reading), refusal: () => emailService.status().reason, connected: (address) => { const one = emailService.store.get(address); return Boolean(one && !one.problem); }, sendingProblem: (address) => emailService.sendingProblem(address), account: (address) => emailService.status().accounts.find((one) => one.address.toLowerCase() === address.toLowerCase()), checkOutgoing: (address, fields) => emailService.checkOutgoing(address, fields), profileAddress: () => cfg.profile?.email?.trim() || undefined }, dataDir: DATA_DIR, providerKeysRefused: Boolean(hostedModels), layerFolder: (botId, threadId) => workspaceDir(teamHost.layer(botId, threadId)), turnVm: (threadId) => localVmThreadTargets.get(threadId)?.key ?? vpsTurnVm(vpsThreadComputers.get(threadId)), writeRemoteFile: vpsWriteSecretFile });
 ROUTES.push(createSecretCardRoutes({ cards: secretCards, phoneSecretSubmissions, threadVisible: (auth, threadId) => visibleTo(viewerFor(auth)).thread(threadId), answerContext: (auth, botId, threadId) => ({ personalCloud: Boolean(CLOUD_PERSONAL), shared: sharedMembership(), owner: (CLOUD_TEAM ? teamOwners.routing.askedPerson(botId, threadId) : null) ?? threadStarters.get(threadId) ?? null, person: auth.kind === "session" ? personKey(auth.session) : null }) }));
 
 // By design OpenMausBot never receives a website password: the person signs in where the bot works, and the bot uses that session.
@@ -12340,6 +12356,18 @@ ROUTES.push(createBrowserSiteRoutes({
   list: (target) => listSignedInSites(target),
   signOut: (target, site) => signOutOfSites(target, site),
 }));
+ROUTES.push(createBotComputerAccessRoutes({ mayEdit: (auth, botId) => Boolean(CLOUD_TEAM) && levelOf(auth, botId) === "edit", botName: (botId) => store.bot(botId)?.name }));
+ROUTES.push(createTeachRecordingRoutes({
+  recorder: new TeachRecorder({ evidence: browserEvidence }),
+  enabled: () => skillAuthoringEnabled(cfg),
+  mayTeach: (botId, auth) => Boolean(CLOUD_TEAM) && levelOf(auth, botId) === "edit",
+  target: createTeachTargets({
+    bot: (id) => store.bot(id), controlKey: botComputerControlKey, inheritsTeamComputer: (bot) => Boolean(inheritedTeamComputer(bot)),
+    ownsLease: (key, leaseId) => computerControl.ownsLease(key, leaseId),
+    vpsComputer: (bot) => vpsTeachComputer(vpsConfigForBot(cfg, bot), bot.id),
+    localVmTarget: localVmTargetForStatus, localVmComputer: localVmTeachComputer, cloudHome: Boolean(CLOUD_HOME),
+  }),
+}));
 ROUTES.push(createBrowserEvidenceRoutes({ evidence: browserEvidence.attach({ onChange: (listener) => store.onChange(listener), threadExists: (id) => Boolean(threadOwner(id)) }), threadExists: (id) => Boolean(threadOwner(id)) }));
 const loginRoutes = botLogins.routes((id) => Boolean(store.bot(id))); ROUTES.push(createLoginRoutes(loginRoutes), createVaultRoutes({ logins: loginRoutes, secrets: logins }));
 ROUTES.push(createUsageRoutes({
@@ -13021,7 +13049,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (method === "POST" && requested !== "auto" && !parseSurface(requested)) {
           return json(res, 400, { error: "surface must be auto, cloud, vm, local, or browser" });
         }
-        const unoffered = CLOUD_HOME && method === "POST" && requested !== "auto" ? cloudHomePlaceRefusal(parseSurface(requested)!) : undefined;
+        const unoffered = CLOUD_HOME && method === "POST" && requested !== "auto" && !(requested === "vm" && bot.computer === "vm") ? cloudHomePlaceRefusal(parseSurface(requested)!) : undefined;
         const options = await selectableComputers(bot), chosen = chosenPlace(store.taskByThread(bot.id, internalCapability.threadId), bot.computer);
         const current = source ? source.mounted ?? "off" : await computerPreviewSurface(bot, bot.threadId);
         requireActiveInternalCapability();
@@ -13153,9 +13181,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // The turn's capability names its Boat; the Boat credential stays here.
       if (await dispatchRoutes([savedSteps.journalRoutes({ capability: internalCapability, readBody: readInternalBody })], { req, res, url, path, method, auth, json, readBody })) return; if (method === "POST" && path === "/api/internal/computer/mcp") {
         const body = await readInternalBody();
-        if (internalCapability.boxId === undefined) return json(res, 403, { error: "this turn has no cloud computer" });
         const abort = new AbortController();
         res.once("close", () => { if (!res.writableEnded) abort.abort(); });
+        if (internalCapability.computerConnection) return json(res, 200, { result: await serveBoxedComputerCall(internalCapability.computerConnection, body, {
+          signal: abort.signal, gate: () => computerCallGate(internalCapability, abort.signal), assertActive: requireActiveInternalCapability,
+        }) });
+        if (internalCapability.boxId === undefined) return json(res, 403, { error: "this turn has no cloud computer" });
         return json(res, 200, { result: await cloudComputerRpc(body, {
           cfg, signal: abort.signal, folder: () => messageFileRootsForThread(internalCapability.botId, internalCapability.threadId)[0],
           boxId: () => internalCapability.boxId ?? claimedBoatId(internalCapability),
@@ -13314,7 +13345,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const body = await readInternalBody();
         try {
           const vm = await attachmentVmForTurn(internalCapability);
-          if (!vm) return json(res, 409, { error: "You have no Local VM desktop in this turn, so there is nowhere to run a command." });
+          if (!vm) {
+            const vpsTarget = vpsExecTargets.get(threadId);
+            if (!vpsTarget || vpsTarget.generation !== internalCapability.generation) {
+              return json(res, 409, { error: "You have no Local VM or cloud computer in this turn, so there is nowhere to run a command." });
+            }
+            const gate = await computerCallGate(internalCapability);
+            if (gate.held) return json(res, 409, { error: controlRefusal(gate) });
+            requireActiveInternalCapability();
+            const result = await vps.vpsContainerExec(vpsTarget.cfg, vpsTarget.botId, vpsTarget.container,
+              typeof body.command === "string" ? body.command : "",
+              { timeoutSeconds: typeof body.timeout_seconds === "number" ? body.timeout_seconds : undefined });
+            return json(res, 200, result);
+          }
           const runtime = (await containerRuntimeStatus()).runtime;
           requireActiveInternalCapability();
           if (!runtime || !internalCapabilityIsActive({ ...internalCapability, localVmTarget: vm }) ||
@@ -15435,6 +15478,7 @@ console.log(LOOPBACK.trust === "service"
   ? `local requests: service trust (${LOOPBACK.reason}); without a session, loopback may use only health, the Slack worker's guarded routes and bot capability routes`
   : `local requests: owner trust (${LOOPBACK.reason})`);
 if (LOOPBACK.warning) console.warn(`local requests: ${LOOPBACK.warning}`);
+{ const relayStatus = relayTokenStatus(); if (relayStatus) console.log(relayStatus); } // HSP patch
 // Every room's floor once, before any request: a room already mixed at start keeps its narrowest audience.
 for (const group of store.groups) settleRoomFloor(group);
 const pruneDecisionLog = () => {
@@ -15453,34 +15497,7 @@ console.log(describeBrand(loadBrand()));
 
 // Before any row below settles: an interrupted dispatch's words come back with a review notice, never to a model a second time.
 followupAtBoot("");
-for (const row of chatFollowups()) {
-  if (row.kind === "aside") { settleChatFollowups([row.id], null); continue; }
-  if (row.status !== "dispatching" && row.status !== "interrupted") continue;
-  const owned = row.kind === "channel"
-    ? Boolean(store.groupByThread(row.threadId)?.id === row.ownerId)
-    : Boolean(store.taskByThread(row.ownerId, row.threadId));
-  if (!owned) { settleChatFollowups([row.id], "cancelled"); continue; }
-  settleChatFollowups([row.id], "interrupted");
-  const messages = store.messagesFor(row.threadId);
-  const recovered = messages.find((message) => message.queueId === row.id && message.role === "user") ?? store.appendMessage(row.threadId, {
-    role: "user", kind: "text", text: row.payload.text, replyToId: row.payload.replyToId,
-    sendId: row.payload.sendId, queueId: row.id, sender: row.payload.sender,
-    ...(row.kind === "channel" ? { channelMode: row.payload.mode, via: row.payload.via } : {}),
-    ...(row.kind === "bot" ? spokenLineFields(row.payload.via, row.payload.callId) : {}),
-  });
-  const recoveredTask = row.kind !== "channel" ? store.taskByThread(row.ownerId, row.threadId) : undefined;
-  const order = store.activePath(row.threadId).filter(isContextMessage).map((m) => m.id);
-  for (const [instanceId, state] of Object.entries(recoveredTask?.handedMessages ?? {})) {
-    if (state.session !== undefined) store.setHandedMessages(row.ownerId, row.threadId, instanceId, recordHanded(state, order, [recovered.id]));
-  }
-  if (!messages.some((message) => message.queueId === row.id && message.kind === "activity")) {
-    store.appendMessage(row.threadId, {
-      role: "bot", kind: "activity", queueId: row.id,
-      tool: noticeTool("chat.notice.followupInterrupted", undefined, { ok: false }),
-    });
-  }
-  settleChatFollowups([row.id], null);
-}
+recoverInterruptedFollowups({ store });
 restoreSteeredMessages();
 restoreChannelMessages();
 

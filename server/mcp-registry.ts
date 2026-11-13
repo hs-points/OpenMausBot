@@ -3,6 +3,7 @@ import { z } from "zod";
 import { RESERVED_MCP_NAMES, slugMcpName } from "../shared/mcp-name.ts";
 import type { McpServerSpec, RemoteMcpSpec, StdioMcpSpec } from "./contracts.ts";
 import { MCP_RESTART_ENV } from "./mcp-app-catalog.ts";
+import { BLOCKED_AGENT_MCP_ERROR, runsBlockedAgentCli } from "./hsp-blocked-mcp.ts";
 
 export { importedMcpServerName } from "../shared/mcp-name.ts";
 
@@ -38,6 +39,8 @@ export interface StoredRemoteMcpServer extends RemoteMcpSpec {
   oauth?: McpOAuthClientConfig;
   resultBudget?: number;
   runsOn?: McpRunsOn;
+  /** The id of the one bot that uses this connection, as a bot's owner adds one from its chat. Absent: every bot's. */
+  bot?: string;
   /** "Show its apps in chat": stored only as `false`; on by default. */
   apps?: false;
 }
@@ -65,6 +68,7 @@ export interface RemoteMcpServerListing {
   apps: boolean;
   oauth?: { clientId: string; scopes: string[]; clientSecretConfigured: boolean };
   runsOn?: McpRunsOn;
+  bot?: string;
 }
 export type McpServerListing = StdioMcpServerListing | RemoteMcpServerListing;
 
@@ -197,6 +201,7 @@ const remoteEntrySchema = z.object({
   resultBudget: resultBudgetSchema.optional(),
   runsOn: runsOnSchema.optional(),
   apps: z.boolean().optional(),
+  bot: z.string().regex(BOT_ID).optional(),
 }).strict();
 
 const remoteMutationSchema = remoteEntrySchema.extend({
@@ -267,6 +272,7 @@ function parseStdio(raw: unknown, mutation: boolean, existing?: StoredMcpServer)
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid MCP server." };
   }
+  if (runsBlockedAgentCli(parsed.data.command, parsed.data.args ?? [])) return { ok: false, error: BLOCKED_AGENT_MCP_ERROR };
   const incoming = parsed.data.env ?? {};
   if (Object.keys(incoming).length > MAX_ENV) {
     return { ok: false, error: `Use at most ${MAX_ENV} environment variables.` };
@@ -292,7 +298,7 @@ function parseStdio(raw: unknown, mutation: boolean, existing?: StoredMcpServer)
 }
 
 function botFor(value: string | undefined, mutation: boolean, existing?: StoredMcpServer): { bot?: string } {
-  const bot = value ?? (mutation && existing && !isRemoteMcpServer(existing) ? existing.bot : undefined);
+  const bot = value ?? (mutation ? existing?.bot : undefined);
   return bot ? { bot } : {};
 }
 
@@ -324,6 +330,7 @@ function parseRemote(raw: unknown, mutation: boolean, existing?: StoredMcpServer
       ...(parsed.data.resultBudget !== undefined ? { resultBudget: parsed.data.resultBudget } : {}),
       ...runsOnFor(parsed.data.runsOn, mutation, existing),
       ...appsFor(parsed.data.apps, mutation, existing),
+      ...botFor(parsed.data.bot, mutation, existing),
     },
   };
 }
@@ -423,6 +430,7 @@ export function listMcpServers(raw: Record<string, unknown> | undefined): McpSer
           oauth: { clientId: server.oauth.clientId, scopes: server.oauth.scopes ?? [], clientSecretConfigured: Boolean(server.oauth.clientSecret) },
         } : {}),
         ...(server.runsOn ? { runsOn: server.runsOn } : {}),
+        ...(server.bot ? { bot: server.bot } : {}),
       }];
     }
     return [{

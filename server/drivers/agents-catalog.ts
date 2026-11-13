@@ -328,7 +328,7 @@ const TOOL_DEFINITIONS = [
   {
     name: "vm_exec",
     description:
-      "Run a shell command inside your own Local VM (as the desktop user, starting in /home/cua/workspace) and get its exit code, stdout and stderr back as text. Use this for all command-line work in the VM: pip install --user, running a script, generating or converting a file, checking that a file exists. Do not type commands into a terminal window and read screenshots: that is slow and unreliable. GUI programs you start appear on the VM desktop. For a long job raise timeout_seconds (default 60, at most 300). Only available while you have a Local VM desktop.",
+      "Run a shell command inside your own Local VM or your own cloud computer (as the desktop user, starting in /home/cua/workspace on a Local VM, /home/cua on a cloud computer) and get its exit code, stdout and stderr back as text. Use this for all command-line work in the VM: pip install --user, running a script, generating or converting a file, checking that a file exists. Do not type commands into a terminal window and read screenshots: that is slow and unreliable. GUI programs you start appear on the VM desktop. For a long job raise timeout_seconds (default 60, at most 300). Only available while you have a Local VM or cloud computer desktop.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -473,7 +473,7 @@ const TOOL_DEFINITIONS = [
   {
     name: "request_credential",
     description:
-      "Ask the person for a secret on a secure card in the app or a QR-paired phone, never in chat. credential_id: a key OpenMausBot keeps (onePasswordToken: a 1Password service account token; email: a mailbox on any mail host, one card for its address and password, or for its outgoing server when it is connected but can't send). Other secrets: label, reason, delivery (a saved one returns at once). You never see the value; end the turn, and you resume when they save or decline.",
+      "Ask the person for a secret on a secure card in the app or a QR-paired phone, never in chat. credential_id: a key OpenMausBot keeps (onePasswordToken: a 1Password service account token; email: a mailbox on any mail host, one card for its address and password, or for its outgoing server when it is connected but can't send). Other secrets: label, reason, delivery (a saved one returns at once). You never see the value; end the turn, and you resume when they save or decline. For a one-time code sent to someone else's email or phone (including Android app sign-ins), use label like \"WeCom code\" with delivery file, never ask in chat; once resumed, type it from the file (e.g. adb -s android:5555 shell input text \"$(cat <file>)\") and delete the file.",
     inputSchema: {
       type: "object",
       properties: {
@@ -497,7 +497,7 @@ const TOOL_DEFINITIONS = [
   {
     name: "request_sign_in",
     description:
-      "Ask the person to sign in to a website themselves, in the browser or on the computer you are using now. Use it when a page needs a login you do not have, or a CAPTCHA, passkey or other step only they can do, or a one-time code you cannot read. A code the site sends to the person's own email or messages for a sign-in they asked for is not one: read it there and type it in yourself. They get a card and a notification, sign in where you work, and press Done. Never ask for a password or code in chat. After calling it, end your turn; OpenMausBot resumes you when they finish or decline, and then check you are signed in.",
+      "Ask the person to sign in to a website themselves, in the browser or on the computer you are using now. Use it when a page needs a login you do not have, or a CAPTCHA, passkey or other step only they can do, or a one-time code you cannot read (a code sent to someone else's email or phone: use request_credential with delivery file). A code the site sends to the person's own email or messages for a sign-in they asked for is not one: read it there and type it in yourself. They get a card and a notification, sign in where you work, and press Done. Never ask for a password or code in chat. After calling it, end your turn; OpenMausBot resumes you when they finish or decline, and then check you are signed in.",
     inputSchema: {
       type: "object",
       additionalProperties: false,

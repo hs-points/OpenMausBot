@@ -151,7 +151,8 @@ const guardedSendSchema = z.object({
   text: z.string().min(1).optional(),
   reaction: z.string().max(64).optional(),
   expectedActiveLeafId: z.string().regex(/^[\w-]+$/).nullable(),
-  expectedApprovalMode: z.enum(["ask", "full"]).optional(),
+  // HSP patch: a relay may also name Auto or Auto-accept edits; it must still match the bot's exact current level.
+  expectedApprovalMode: z.enum(["ask", "edits", "auto", "full"]).optional(),
   replyToId: z.string().optional(),
   onBehalfOf: z.object({
     email: z.string().trim().toLowerCase().max(254).pipe(z.email()).optional(),

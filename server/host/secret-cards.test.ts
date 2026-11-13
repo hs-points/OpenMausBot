@@ -1,12 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import "../server-line-packs.ts";
 import type { BotRecord, Message } from "../store.ts";
 import { EMAIL_CANT_SEND_TEXT } from "../email/instructions.ts";
-import { createSecretCards } from "./secret-cards.ts";
+import { createSecretCards, remoteComputer, savedSecretText } from "./secret-cards.ts";
 import { CREDENTIAL_TARGETS } from "../../shared/credential-request.ts";
 import { redactBotAuthored } from "../message-redaction.ts";
 import { redactSecretsInText } from "../redact.ts";
@@ -15,7 +15,7 @@ import { VaultStore } from "../vault-store.ts";
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-function fixture(language?: string) {
+function fixture(language?: string, extra: Record<string, unknown> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "omb-secret-cards-"));
   dirs.push(dataDir);
   const lines: Message[] = [];
@@ -40,7 +40,7 @@ function fixture(language?: string) {
     store: store as never, cfg: {} as never, botLogins: { credentialConfig: (config) => ({ ...config, onePassword: { connected: false } }) }, vaultStore,
     phoneSecrets: { provide: async () => {}, open: () => {} } as never, phoneSecretSubmissions: { has: () => false } as never,
     connectorThread: () => ({ bot, group: undefined }), answerCardNode: (_thread, _id, text) => { resumed.push(text); return true; }, followCard: () => {}, dataDir, providerKeysRefused: false,
-    layerFolder: () => dataDir, turnVm: () => undefined, ...(language ? { threadLanguage: () => language } : {}),
+    layerFolder: () => dataDir, turnVm: () => undefined, ...(language ? { threadLanguage: () => language } : {}), ...extra,
   });
   return { cards, lines, bot, vaultStore, resumed, dataDir };
 }
@@ -101,11 +101,11 @@ describe("a secret a card saves to the Vault", () => {
     one.cards.requestCredential(one.bot, threadId, { label: "Stripe secret key", reason: "For test charges.", delivery: "ref", ...extra });
   const refIn = (text: unknown) => /secret-ref:[0-9a-f]{32}/u.exec(String(text))?.[0];
 
-  it("is kept for the asking bot, and its next ask, in any conversation and after any ref is spent, gets a fresh one with no card", () => {
+  it("is kept for the asking bot, and its next ask, in any conversation and after any ref is spent, gets a fresh one with no card", async () => {
     const one = fixture();
     const card = ask(one, "t1");
     expect(card.status).toBe(201);
-    expect(one.cards.saveCustomSecret("ledger", "t1", String(card.body.messageId), `  ${KEY} `).status).toBe(200);
+    expect((await one.cards.saveCustomSecret("ledger", "t1", String(card.body.messageId), `  ${KEY} `)).status).toBe(200);
     expect(one.vaultStore.listSecrets()).toMatchObject([{ name: "Stripe secret key", source: "card", bots: ["ledger"], refOnly: true }]);
     const fromCard = refIn(one.resumed[0]);
     expect(fromCard).toBeDefined();
@@ -142,13 +142,53 @@ describe("a secret a card saves to the Vault", () => {
     expect(readFileSync(file, "utf8")).toBe(KEY);
   });
 
-  it("is asked for again when the bot says the saved one is wrong, and the new value replaces it", () => {
+  it("is asked for again when the bot says the saved one is wrong, and the new value replaces it", async () => {
     const one = fixture();
     one.vaultStore.saveSecret({ name: "Stripe secret key", value: KEY, source: "card", bots: ["ledger"], refOnly: true });
     const card = ask(one, "t1", { replace: true });
     expect(card.status).toBe(201);
-    one.cards.saveCustomSecret("ledger", "t1", String(card.body.messageId), "sk_test_fake-card-vault-2");
+    await one.cards.saveCustomSecret("ledger", "t1", String(card.body.messageId), "sk_test_fake-card-vault-2");
     expect(one.vaultStore.secretValues()).toEqual(["sk_test_fake-card-vault-2"]);
+  });
+});
+
+describe("a file secret for a remote VPS computer", () => {
+  const CODE = "482913";
+  const vpsVm = "vps:hsp-vps:openmausbot-vps-bot-0123456789ab";
+  const asked = (extra: Record<string, unknown>, vm: string | undefined) => {
+    const made = fixture(undefined, { turnVm: () => vm, phoneSecretSubmissions: { has: () => false }, ...extra });
+    made.cards.requestCredential(made.bot, "ledger-main", { label: "WeCom code", reason: "WeCom emailed a sign-in code.", delivery: "file" });
+    return made;
+  };
+
+  it("records the VPS computer on the card and writes the value there, not on this host", async () => {
+    const writeRemoteFile = vi.fn(async (_alias: string, _container: string, threadId: string, messageId: string) =>
+      `/home/cua/workspace/.openmausbot-secrets/${threadId}/${messageId}`);
+    const { cards, lines, bot, dataDir } = asked({ writeRemoteFile }, vpsVm);
+    expect(lines[0]!.secret!.vm).toBe(vpsVm);
+    const saved = await cards.saveCustomSecret(bot.id, "ledger-main", lines[0]!.id, CODE);
+    expect(saved.status).not.toBe(500);
+    expect(writeRemoteFile).toHaveBeenCalledExactlyOnceWith("hsp-vps", "openmausbot-vps-bot-0123456789ab", "ledger-main", lines[0]!.id, CODE);
+    expect(JSON.stringify(saved.body)).not.toContain(CODE);
+    expect(redactSecretsInText(`typed ${CODE} into the phone`)).not.toContain(CODE);
+    expect(readdirSync(dataDir)).not.toContain(".openmausbot-secrets");
+  });
+
+  it("tells the bot the path on the computer and fails closed when it cannot be written", async () => {
+    const path = "/home/cua/workspace/.openmausbot-secrets/ledger-main/m1";
+    const ok = asked({ writeRemoteFile: async () => path }, vpsVm);
+    await ok.cards.saveCustomSecret(ok.bot.id, "ledger-main", ok.lines[0]!.id, CODE);
+    expect(savedSecretText("WeCom code", { file: path })).toContain(`cat '${path}'`);
+    const failing = asked({ writeRemoteFile: async () => { throw new Error("the VPS computer could not take the secret file"); } }, vpsVm);
+    const result = await failing.cards.saveCustomSecret(failing.bot.id, "ledger-main", failing.lines[0]!.id, CODE);
+    expect(result.status).toBe(500);
+    expect(JSON.stringify(result.body)).not.toContain(CODE);
+  });
+
+  it("parses only the vps: form as a remote computer", () => {
+    expect(remoteComputer(vpsVm)).toEqual({ alias: "hsp-vps", container: "openmausbot-vps-bot-0123456789ab" });
+    expect(remoteComputer("pool:3")).toBeNull();
+    expect(remoteComputer(undefined)).toBeNull();
   });
 });
 

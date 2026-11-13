@@ -9,7 +9,6 @@ import {
   CUA_SOCKET,
   IMAGE as CUA_IMAGE,
   cuaExecArgs,
-  dockerSecurityIsHardened,
   imageLabelsMatch,
   managedImageDockerfile,
   wholeScreenshot,
@@ -20,8 +19,13 @@ import {
   IMAGE_LAYER_LABEL,
   IMAGE_LAYER_VERSION,
   MANAGED_LABEL,
+  DISPLAY,
+  clipExecOutput,
+  type ContainerExecResult,
 } from "./container-computer.ts";
 import { PIDS_LIMIT, raisePidsLimit } from "./container-limits.ts";
+import { syncVpsLimits, vpsCapabilityArgs, vpsResourceArgs, vpsSecurityAccepted } from "./vps-container-settings.ts";
+import type { VpsComputerSettings } from "../shared/vps-computer-settings.ts";
 import { DATA_DIR, isValidSshAlias, vpsSshAlias, type AppConfig } from "./config.ts";
 import { augmentedPath } from "./env-path.ts";
 import { COMMAND_TIMEOUT_KILL_GRACE_MS, defaultRunner, type VpsCommandRunner } from "./vps-command.ts";
@@ -66,7 +70,7 @@ const lifecycleLocks = new Map<string, Promise<void>>();
 /** The app config reloads in place: across awaits it could inspect one host and mutate another. */
 function snapshotVpsConfig(cfg: AppConfig): AppConfig {
   const sshAlias = vpsSshAlias(cfg);
-  return sshAlias ? { vps: { sshAlias } } : {};
+  return sshAlias ? { vps: { sshAlias, ...(cfg.vps?.computer ? { computer: { ...cfg.vps.computer } } : {}) } } : {};
 }
 
 export function vpsLifecycleBusy(): boolean {
@@ -107,7 +111,7 @@ export interface VpsComputerStatus {
   managed: boolean;
   container: "running" | "stopped" | "missing";
   network: "private" | "unsafe" | "unknown";
-  mounts: "none" | "unsafe" | "unknown";
+  mounts: "none" | "home" | "unsafe" | "unknown";
   security: "hardened" | "unsafe" | "unknown";
   desktopReady: boolean;
   desktop_error: string | null;
@@ -334,16 +338,34 @@ function viewerPassword(env: string[] | undefined): string | null {
   return value && /^[A-Za-z0-9_-]{8,128}$/.test(value) ? value : null;
 }
 
-function hasNoHostMounts(detail: {
+/** HSP: the computer's home lives on this named volume, so removing or rebuilding the container keeps sign-ins,
+ * browser profiles and files. `docker rm` without -v leaves it; deleting it is a deliberate manual step. */
+export const VPS_HOME_TARGET = "/home/cua";
+export function vpsHomeVolumeName(containerName: string): string {
+  return `${containerName}-home`;
+}
+export function vpsMountsUsable(mounts: VpsComputerStatus["mounts"]): boolean {
+  return mounts === "none" || mounts === "home";
+}
+
+/** "home" = exactly this computer's own home volume and nothing else; any host folder, other volume or shared mount is unsafe. */
+function mountState(detail: {
   Mounts?: unknown;
   HostConfig?: { Binds?: string[] | null; VolumesFrom?: string[] | null };
-}): boolean {
-  return (
-    Array.isArray(detail.Mounts) &&
-    detail.Mounts.length === 0 &&
-    (!detail.HostConfig?.Binds || detail.HostConfig.Binds.length === 0) &&
-    (!detail.HostConfig?.VolumesFrom || detail.HostConfig.VolumesFrom.length === 0)
-  );
+}, containerName: string): "none" | "home" | "unsafe" {
+  if (detail.HostConfig?.Binds && detail.HostConfig.Binds.length > 0) return "unsafe";
+  if (detail.HostConfig?.VolumesFrom && detail.HostConfig.VolumesFrom.length > 0) return "unsafe";
+  if (!Array.isArray(detail.Mounts)) return "unsafe";
+  if (detail.Mounts.length === 0) return "none";
+  if (detail.Mounts.length !== 1) return "unsafe";
+  const mount = detail.Mounts[0] as { Type?: unknown; Name?: unknown; Destination?: unknown; Driver?: unknown; RW?: unknown };
+  return mount.Type === "volume" &&
+    mount.Name === vpsHomeVolumeName(containerName) &&
+    mount.Destination === VPS_HOME_TARGET &&
+    (mount.Driver === undefined || mount.Driver === "local") &&
+    mount.RW === true
+    ? "home"
+    : "unsafe";
 }
 
 function hasNoPublishedPorts(config: {
@@ -370,7 +392,7 @@ function statusProblem(status: VpsComputerStatus): string | null {
   if (!status.imageMatches) return "The VPS container uses an incompatible or untrusted OpenMausBot image";
   if (!status.managed) return "The VPS container name is occupied by a container OpenMausBot did not create";
   if (status.network === "unsafe") return "The VPS container uses an unapproved network or publishes ports; refusing to use it";
-  if (status.mounts === "unsafe") return "The VPS container has host mounts; refusing to use it";
+  if (status.mounts === "unsafe") return "The VPS container has host mounts or an unexpected volume; refusing to use it";
   if (status.security === "unsafe") return "The VPS container has unsupported privilege, isolation, or automatic-removal settings";
   if (status.container === "stopped") return "The OpenMausBot VPS container is stopped";
   if (status.desktop_error) return `The VPS Cua desktop failed to start: ${status.desktop_error}`;
@@ -428,6 +450,7 @@ async function computeVpsComputerStatus(
     const inspected = JSON.parse((await inspect(["inspect", status.container_name])).stdout) as Array<{
       Config?: { Image?: string; Labels?: Record<string, string>; Env?: string[] };
       HostConfig?: DockerHardeningConfig & {
+        Memory?: number | null; MemorySwap?: number | null; NanoCpus?: number | null;
         Binds?: string[] | null;
         VolumesFrom?: string[] | null;
         NetworkMode?: string;
@@ -460,11 +483,10 @@ async function computeVpsComputerStatus(
       labels?.[VPS_CONTAINER_LABEL] === status.container_name &&
       (environmentLabel === undefined || environmentLabel === vpsEnvironmentId());
     if (status.managed && status.container_id) raisePidsLimit(status.container_id, detail?.HostConfig?.PidsLimit, run);
+    if (status.managed && status.container_id) syncVpsLimits(status.container_id, detail?.HostConfig, cfg.vps?.computer, run);
     status.network = hasNoPublishedPorts(detail?.HostConfig, detail?.NetworkSettings?.Networks) ? "private" : "unsafe";
-    status.mounts = hasNoHostMounts(detail ?? {}) ? "none" : "unsafe";
-    status.security = dockerSecurityIsHardened(detail?.HostConfig, { restartPolicy: "any" })
-      ? "hardened"
-      : "unsafe";
+    status.mounts = mountState(detail ?? {}, status.container_name);
+    status.security = vpsSecurityAccepted(detail?.HostConfig, cfg.vps?.computer) ? "hardened" : "unsafe";
 
     const connectionKey = `${alias}:${status.container_name}`;
     const privateIp = Object.values(detail?.NetworkSettings?.Networks ?? {})[0]?.IPAddress;
@@ -482,7 +504,7 @@ async function computeVpsComputerStatus(
       status.imageMatches &&
       status.managed &&
       status.network === "private" &&
-      status.mounts === "none" &&
+      vpsMountsUsable(status.mounts) &&
       status.security === "hardened";
     if (canProbe && containerRef) {
       try {
@@ -723,6 +745,7 @@ export function vpsContainerRunArgs(
   containerName: string,
   imageRef = VPS_IMAGE,
   viewerSecret = randomBytes(18).toString("base64url"),
+  settings?: VpsComputerSettings,
 ): string[] {
   if (!CONTAINER_NAME.test(containerName) || (imageRef !== VPS_IMAGE && !IMAGE_ID.test(imageRef))) {
     throw new Error("invalid managed VPS container or image reference");
@@ -749,12 +772,7 @@ export function vpsContainerRunArgs(
     `${BASE_IMAGE_LABEL}=${BASE_IMAGE_DIGEST}`,
     "--label",
     `${IMAGE_LAYER_LABEL}=${IMAGE_LAYER_VERSION}`,
-    "--memory",
-    "4g",
-    "--memory-swap",
-    "4g",
-    "--cpus",
-    "2",
+    ...vpsResourceArgs(settings),
     "--pids-limit", String(PIDS_LIMIT),
     "--network",
     "bridge",
@@ -762,17 +780,15 @@ export function vpsContainerRunArgs(
     "private",
     "--cgroupns",
     "private",
-    "--cap-drop",
-    "ALL",
-    "--cap-add",
-    "SETUID",
-    "--cap-add",
-    "SETGID",
+    ...vpsCapabilityArgs(settings),
     "--shm-size",
     "512m",
     // Without a restart policy Docker leaves the container down after a VPS reboot; unless-stopped still honors Stop.
     "--restart",
     "unless-stopped",
+    // HSP: the home survives removal and rebuilds; Docker creates the volume on first run, seeded from the image.
+    "--mount",
+    `type=volume,source=${vpsHomeVolumeName(containerName)},target=${VPS_HOME_TARGET}`,
     "-e",
     `VNC_PW=${viewerSecret}`,
     imageRef,
@@ -785,7 +801,7 @@ function assertUsableContainer(status: VpsComputerStatus) {
     !status.imageMatches ||
     !status.managed ||
     status.network !== "private" ||
-    status.mounts !== "none" ||
+    !vpsMountsUsable(status.mounts) ||
     status.security !== "hardened"
   ) {
     throw Object.assign(new Error(status.problem ?? "The existing VPS container is unsafe or incompatible"), {
@@ -991,7 +1007,7 @@ export async function vpsComputerAction(
             imageRef = (await computeVpsComputerStatus(cfg, botId, runner)).image_id;
           }
           if (!imageRef) throw Object.assign(new Error("The prepared VPS image could not be identified"), { status: 409 });
-          await run(vpsContainerRunArgs(before.container_name, imageRef));
+          await run(vpsContainerRunArgs(before.container_name, imageRef, undefined, cfg.vps?.computer));
         } else {
           assertUsableContainer(before);
           if (before.container === "stopped") await run(["start", containerRef]);
@@ -1159,6 +1175,43 @@ async function startDesktopTunnel(cfg: AppConfig, botId: string, alias: string, 
   tunnel.expiry.unref();
   desktopTunnels.set(botId, tunnel);
   return tunnel;
+}
+
+const VPS_EXEC_EXIT = "__omb_exit__=";
+
+/** vm_exec on a bot's self-hosted VPS computer: runs as the desktop user inside the bot's own container, never on the
+ * VPS host, and opens no window. The command travels as argv; the wrapper prints its exit code so the runner, which
+ * rejects any non-zero exit, still hands back the output. */
+export async function vpsContainerExec(
+  cfg: AppConfig,
+  botId: string,
+  containerRef: string | undefined,
+  command: string,
+  options: { timeoutSeconds?: number; runner?: VpsCommandRunner } = {},
+): Promise<ContainerExecResult> {
+  if (!command.trim()) throw Object.assign(new Error("command is required"), { status: 400 });
+  if (command.length > 20_000) throw Object.assign(new Error("command is too long"), { status: 400 });
+  if (options.timeoutSeconds !== undefined && !Number.isFinite(options.timeoutSeconds)) {
+    throw Object.assign(new Error("timeout_seconds must be finite"), { status: 400 });
+  }
+  const alias = vpsSshAlias(cfg);
+  if (!alias) throw Object.assign(new Error("VPS is not configured"), { status: 409 });
+  const container = containerRef ?? vpsContainerName(botId);
+  if (!CONTAINER_NAME.test(container) && !CONTAINER_ID.test(container)) throw new Error("invalid VPS container");
+  const seconds = Math.min(Math.max(Math.floor(options.timeoutSeconds ?? 60), 1), 300);
+  const { stdout, stderr } = await (options.runner ?? defaultRunner)(vpsDockerArgs(alias, [
+    "exec", "-u", "cua", "-w", "/home/cua", "-e", "HOME=/home/cua", "-e", `DISPLAY=${DISPLAY}`, container,
+    "sh", "-c", `timeout -k 5 ${seconds} sh -lc "$1"; echo "${VPS_EXEC_EXIT}$?" >&2`, "omb-exec", command,
+  ]), { timeoutMs: (seconds + 30) * 1000 });
+  const marker = stderr.lastIndexOf(VPS_EXEC_EXIT);
+  const exitCode = marker >= 0 ? Number.parseInt(stderr.slice(marker + VPS_EXEC_EXIT.length), 10) : -1;
+  const errors = marker >= 0 ? stderr.slice(0, marker) : stderr;
+  return {
+    exitCode: Number.isFinite(exitCode) ? exitCode : -1,
+    stdout: clipExecOutput(stdout),
+    stderr: clipExecOutput(errors),
+    timedOut: exitCode === 124 || exitCode === 137,
+  };
 }
 
 export function vpsContainerMcpArgs(alias: string, containerName: string): string[] {

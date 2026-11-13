@@ -56,6 +56,19 @@ describe("recorded browser step routes", () => {
     expect(rest).toMatchObject({ steps: [{ step: 3 }], nextAfter: null });
   });
 
+  it("serves a taught step's PNG screenshot as a PNG", async () => {
+    const { base, evidence } = await serve();
+    const step = evidence.nextStep();
+    const slot = evidence.imageTarget("thread-1", GEN, step, "png");
+    if (!("path" in slot)) throw new Error(slot.skipped);
+    writeFileSync(slot.path, Buffer.from("png bytes"));
+    const saved = await evidence.commit({ v: 1, step, at: 1, threadId: "thread-1", generation: GEN, image: null, action: "click" }, slot.path);
+    const image = await fetch(`${base}/api/threads/thread-1/evidence/${GEN}/${saved.image}`);
+    expect(image.status).toBe(200);
+    expect(image.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await image.arrayBuffer()).toString()).toBe("png bytes");
+  });
+
   it("serves a screenshot as an uncached private JPEG, and nothing else", async () => {
     const { base, record } = await serve();
     const one = await record("thread-1", Buffer.from("jpeg bytes"));

@@ -44,6 +44,8 @@ export async function connectDesktop(screen: HTMLElement, target: string, option
     credentials: { password: config.password ?? "", username: "", target: "" },
   });
   client.scaleViewport = true;
+  // The viewer copies the remote cursor image; when the remote hides it (a browser while typing, a blank app cursor) show a dot so the pointer never vanishes.
+  client.showDotCursor = true;
   client.background = "var(--color-inset)";
   let ended = false;
   const deadline = setTimeout(() => { client.disconnect(); end(); }, 15_000);

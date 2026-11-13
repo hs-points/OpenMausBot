@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { createServer, type Server } from "node:net";
+import { vpsWriteSecretFile } from "./vps-secret-file.ts";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 vi.mock("node:child_process", async () => ({
@@ -108,7 +109,7 @@ function fixture({
   container?: boolean;
   running?: boolean;
   managed?: boolean;
-  mounts?: boolean;
+  mounts?: boolean | "home" | "other-volume";
   publicPorts?: boolean;
   publishAllPorts?: boolean;
   deviceRequests?: boolean;
@@ -181,7 +182,7 @@ function fixture({
            Id: containerId,
           Image: state.image ? state.containerImageId : "old-image-id",
           HostConfig: {
-            Binds: mounts ? ["/host:/container"] : [],
+            Binds: mounts === true ? ["/host:/container"] : [],
             VolumesFrom: [],
             NetworkMode: networkMode,
             PortBindings: publicPorts ? { "6901/tcp": [{ HostIp: "0.0.0.0" }] } : {},
@@ -210,7 +211,11 @@ function fixture({
           NetworkSettings: {
             Networks: { [networkMode === "default" ? "bridge" : networkMode]: { IPAddress: "172.17.0.5" } },
           },
-          Mounts: mounts ? [{ Source: "/host", Destination: "/container" }] : [],
+          Mounts: mounts === true
+            ? [{ Source: "/host", Destination: "/container" }]
+            : mounts
+              ? [{ Type: "volume", Name: mounts === "home" ? `${vpsContainerName(BOT_ID)}-home` : "someone-else-home", Destination: "/home/cua", Driver: "local", RW: true }]
+              : [],
           State: { Running: state.running },
         }]),
         stderr: "",
@@ -301,6 +306,30 @@ describe("VPS computer", () => {
     expect(() => vpsContainerMcpArgs("production-vps", "not a container")).toThrow(/connection/);
   });
 
+  it("writes a file secret into the VPS container over stdin, never in argv", async () => {
+    const calls: Array<{ args: string[]; input?: string }> = [];
+    const runner = async (args: string[], options?: { input?: string }) => { calls.push({ args, input: options?.input }); return { stdout: "", stderr: "" }; };
+    const path = await vpsWriteSecretFile("production-vps", "openmausbot-vps-bot-0123456789ab", "thread-1", "card-1", "482913", runner);
+    expect(path).toBe("/home/cua/workspace/.openmausbot-secrets/thread-1/card-1");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.args.slice(0, 3)).toEqual(["-H", "ssh://production-vps", "exec"]);
+    expect(calls[0]!.input).toBe("482913");
+    expect(JSON.stringify(calls[0]!.args)).not.toContain("482913");
+    const script = calls[0]!.args.at(-1)!;
+    expect(script).toContain("umask 077");
+    expect(script).toContain("chmod 600");
+  });
+
+  it("refuses unsafe secret targets and hides a failed write's detail", async () => {
+    const runner = async () => ({ stdout: "", stderr: "" });
+    await expect(vpsWriteSecretFile("prod;vps", "openmausbot-vps-bot-0123456789ab", "t", "c", "x", runner)).rejects.toThrow(/target/);
+    await expect(vpsWriteSecretFile("production-vps", "bad container", "t", "c", "x", runner)).rejects.toThrow(/target/);
+    await expect(vpsWriteSecretFile("production-vps", "openmausbot-vps-bot-0123456789ab", "../x", "c", "x", runner)).rejects.toThrow(/invalid/);
+    const failing = async () => { throw new Error("ssh: 482913 leaked"); };
+    await expect(vpsWriteSecretFile("production-vps", "openmausbot-vps-bot-0123456789ab", "t", "c", "482913", failing))
+      .rejects.toThrow("the VPS computer could not take the secret file");
+  });
+
   it("keeps the live desktop behind a validated loopback SSH forward", () => {
     const args = vpsSshTunnelArgs("production-vps", 45678, "172.17.0.5");
     expect(args).toContain("127.0.0.1:45678:172.17.0.5:6901");
@@ -379,10 +408,20 @@ describe("VPS computer", () => {
     },
   );
 
+  it("accepts the computer's own home volume and nothing else", async () => {
+    const home = await vpsComputerStatus(CONFIG, BOT_ID, fixture({ mounts: "home" }).runner);
+    expect(home.mounts).toBe("home");
+    expect(home.ready).toBe(true);
+  });
+
   it("refuses host mounts, public ports, and unowned containers", async () => {
     const mounted = await vpsComputerStatus(CONFIG, BOT_ID, fixture({ mounts: true }).runner);
     expect(mounted.ready).toBe(false);
     expect(mounted.mounts).toBe("unsafe");
+
+    const otherVolume = await vpsComputerStatus(CONFIG, BOT_ID, fixture({ mounts: "other-volume" }).runner);
+    expect(otherVolume.ready).toBe(false);
+    expect(otherVolume.mounts).toBe("unsafe");
 
     const publicPorts = await vpsComputerStatus(CONFIG, BOT_ID, fixture({ publicPorts: true }).runner);
     expect(publicPorts.ready).toBe(false);
@@ -477,7 +516,8 @@ describe("VPS computer", () => {
     expect(run.join(" ")).toContain("--restart unless-stopped");
     expect(run).toContain("-e");
     expect(run.some((arg) => /^VNC_PW=[A-Za-z0-9_-]{8,}$/.test(arg))).toBe(true);
-    expect(run).not.toContain("--mount");
+    expect(run[run.indexOf("--mount") + 1]).toBe(`type=volume,source=${vpsContainerName(BOT_ID)}-home,target=/home/cua`);
+    expect(run.filter((arg) => arg === "--mount")).toHaveLength(1);
     expect(run).not.toContain("-p");
     const build = provision.calls.find(({ args }) => args[2] === "build");
     expect(build?.args.slice(2)).toEqual(["build", "--force-rm", "-t", VPS_IMAGE, "-"]);

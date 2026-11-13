@@ -148,5 +148,29 @@ export function useComputerTakeover({ botId, session, held, request, viewerClose
     return () => clearTimeout(timer);
   }, [here, held, end]);
 
-  return { here, expanded, setExpanded, handingBack, take, handBack, leave };
+  /** The lease this view holds, which a recording of the person's own steps is bound to; null when it holds none. */
+  const leaseId = useCallback(() => lease.current?.id ?? null, []);
+
+  return { here, expanded, setExpanded, handingBack, take, handBack, leave, leaseId };
+}
+
+export type ComputerTakeover = ReturnType<typeof useComputerTakeover>;
+
+/** Takes control here, or only opens the desktop larger when this view already has it; false when taking it failed. */
+export async function takeDesktop(takeover: ComputerTakeover, expand: boolean, setPending: (pending: boolean) => void, setError: (error: Error | string | null) => void): Promise<boolean> {
+  if (takeover.here) {
+    takeover.setExpanded(expand || takeover.expanded);
+    return true;
+  }
+  setPending(true);
+  setError(null);
+  try {
+    await takeover.take(expand);
+    return true;
+  } catch (cause) {
+    setError(cause instanceof Error ? cause : String(cause));
+    return false;
+  } finally {
+    setPending(false);
+  }
 }

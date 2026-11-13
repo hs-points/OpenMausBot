@@ -71,6 +71,8 @@ export interface SecretCardsDeps {
   layerFolder(botId: string, threadId: string): string;
   /** The Local VM (its target key) this conversation's turn holds right now, if any. */
   turnVm(threadId: string): string | undefined;
+  /** Writes a file secret onto the remote (VPS) computer a card names, `vps:<alias>:<container>`; resolves to the path the bot reads. */
+  writeRemoteFile?(alias: string, container: string, threadId: string, messageId: string, value: string): Promise<string>;
   /** The language a line in this conversation is written in for its person (server/server-lines.ts). */
   threadLanguage?(threadId: string): string | undefined;
   /** The Email connector the mailbox card saves to: connecting proves it reads a real header before anything is kept. */
@@ -119,6 +121,17 @@ function vmFileHome(botId: string, vm: string): SecretFileHome | null {
     : pool ? poolLocalVmTarget(Number(pool[1]))
       : perBotLocalVmTarget(botId).key === vm ? perBotLocalVmTarget(botId) : null;
   return target ? { host: target.workspaceDir, shown: VM_WORKSPACE_GUEST } : null;
+}
+
+/** A card's `vm` of the form `vps:<ssh alias>:<container>`: the remote Linux computer the asking turn runs on. */
+export function remoteComputer(vm: string | undefined): { alias: string; container: string } | null {
+  const found = /^vps:([^:]+):(.+)$/.exec(vm ?? "");
+  return found ? { alias: found[1]!, container: found[2]! } : null;
+}
+
+/** The `vm` a VPS turn's cards carry: the inverse of `remoteComputer`. */
+export function vpsTurnVm(computer: { alias: string; container: string } | undefined): string | undefined {
+  return computer ? `vps:${computer.alias}:${computer.container}` : undefined;
 }
 
 /** What the bot hears when the mailbox card settles; it never hears the password. */
@@ -221,11 +234,16 @@ export function createSecretCards(deps: SecretCardsDeps) {
 
   /** Saves a custom card's value to the Vault for the asking bot, hands it over as its delivery says, and marks when;
    * never touches the card's other fields. */
-  function storeCustomSecret(message: Message, botId: string, threadId: string, value: string): void {
+  async function storeCustomSecret(message: Message, botId: string, threadId: string, value: string): Promise<void> {
     const secret = message.secret!;
     const owner = { botId, threadId };
     vaultStore.saveSecret({ name: secret.label, value, source: "card", bots: [botId], refOnly: secret.delivery !== "file" });
-    if (secret.delivery === "file") {
+    const remote = secret.delivery === "file" ? remoteComputer(secret.vm) : null;
+    if (remote) {
+      // The bot's commands run on that machine, so the file must be there; this host's folder would be out of their reach.
+      if (!deps.writeRemoteFile) throw new Error("no way to reach the remote computer");
+      vault.keepRemoteFile(message.id, value, await deps.writeRemoteFile(remote.alias, remote.container, threadId, message.id, value));
+    } else if (secret.delivery === "file") {
       vault.saveFile(owner, message.id, value, fileHome(botId, threadId, secret.vm));
     } else {
       vault.saveRef(owner, message.id, secret.label, value);
@@ -234,7 +252,7 @@ export function createSecretCards(deps: SecretCardsDeps) {
   }
 
   /** A value typed into a custom card in the app: kept, then the paused turn resumes. */
-  function saveCustomSecret(botId: string, threadId: string, messageId: string, raw: unknown): { status: number; body: Record<string, unknown> } {
+  async function saveCustomSecret(botId: string, threadId: string, messageId: string, raw: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
     const message = secretMessage(botId, threadId, messageId);
     if (!message?.secret) return { status: 404, body: { ...userError("serverError.secret.missing") } };
     const secret = message.secret;
@@ -251,7 +269,7 @@ export function createSecretCards(deps: SecretCardsDeps) {
       return { status: 400, body: { ...userError("serverError.secret.valueSize", { bytes: SECRET_VALUE_MAX_BYTES }) } };
     }
     try {
-      storeCustomSecret(message, botId, threadId, value);
+      await storeCustomSecret(message, botId, threadId, value);
     } catch (error) {
       console.warn(`secret card: could not keep a secret: ${error instanceof Error ? error.message : String(error)}`);
       return { status: 500, body: { ...userError("serverError.secret.notKeptSafely") } };
@@ -442,7 +460,7 @@ export function createSecretCards(deps: SecretCardsDeps) {
             : await deps.email.connect({ address: current.secret.address, password: opened });
           if (!answer.ok) throw new PhoneSecretError(answer.error, 400);
           store.patchMessage(context.threadId, current.id, { secret: { ...current.secret, savedAt: Date.now() } });
-        } else storeCustomSecret(current, context.botId, context.threadId, opened);
+        } else await storeCustomSecret(current, context.botId, context.threadId, opened);
       }
       const saved = secretMessage(context.botId, context.threadId, context.messageId) ?? current;
       // Electron acknowledges only after credentials.bin and the config update both commit; keep this assertion so no handler resumes first.

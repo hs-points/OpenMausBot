@@ -46,6 +46,9 @@ export interface InternalMcpDeps {
   guestDriven(): boolean;
   /** True off a Team Cloud; on one, the person this turn acts for is an owner or admin. */
   teamAdmin(): boolean;
+  /** On a Team Cloud, the person this turn acts for is the member the bot reports to: they may add a connection that only
+   * this bot uses, never one every bot gets. */
+  ownerAsks?(): boolean;
   /** The bot's tool selection reaches this server; never widened here. */
   canUse(name: string): boolean;
   config: McpConfig;
@@ -207,13 +210,15 @@ function list(deps: Deps): Outcome {
 async function add(deps: Deps, name: string, fields: Record<string, unknown>, signal: AbortSignal, computer?: string): Promise<Outcome> {
   const managed = deps.addRefusal?.();
   if (managed) return { status: 403, error: managed };
-  if (!deps.teamAdmin()) return { status: 403, error: ASK_ADMIN };
+  const ownOnly = !deps.teamAdmin();
+  if (ownOnly && deps.ownerAsks?.() !== true) return { status: 403, error: ASK_ADMIN };
   if (Object.hasOwn(deps.cfg().mcpServers ?? {}, name)) return { status: 409, error: `${name} already exists. Use update, or pick another name.` };
   const redeemed = deps.redeem(trimmedRefs({ name, ...fields }));
   if (!redeemed.ok) return { status: 400, error: redeemed.error };
   const added = deps.botAdd(deps.cfg().mcpServers ?? {}, redeemed.value);
   if (!added.ok) return { status: added.status, error: added.error };
-  const placed = deps.place ? await deps.place(added.server, computer) : { ok: true as const, server: added.server };
+  const scoped: StoredMcpServer = ownOnly ? { ...added.server, bot: deps.sender.id } : added.server;
+  const placed = deps.place ? await deps.place(scoped, computer) : { ok: true as const, server: scoped };
   if (!placed.ok) return { status: 409, error: placed.error };
   const server = placed.server;
   const saved = deps.config.add(name, server);

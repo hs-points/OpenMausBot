@@ -7,6 +7,7 @@ import { isIP } from "node:net";
 import { BOT_PROFILE_PATCH_FIELDS } from "./bot-profile.ts";
 import type { Scope, SessionRecord, SessionRegistry } from "./sessions.ts";
 import { denyReason as companionDenial, isCompanionNotice } from "../companion/src/routes.ts";
+import { RELAY_TOKEN_HEADER, relayTokenRefusal } from "./hsp-relay-token.ts";
 
 /** `owner`: the machine's owner. `service`: a shared server where every bot's shell is a loopback caller too,
  * so loopback without a session may reach only SERVICE_ALLOW. */
@@ -434,6 +435,14 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["PUT"], path: /^\/api\/bots\/[\w-]+\/reports-to$/ },
   // a Team Cloud bot's sharing: the handler lets only someone who can edit the bot change it
   { methods: ["PUT"], path: /^\/api\/bots\/[\w-]+\/access$/ },
+  // Teach on computer: the handler lets only the owner, an Admin, or a team member who can edit the bot record
+  { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/teach\/(?:start|events|stop|discard)$/ },
+  // A bot's cloud screen: the handler lets only an Admin or a team member who can edit the bot watch it, join it and take
+  // control. Provisioning, sleeping, running commands on and removing the computer stay an Admin's.
+  { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/computer$/ },
+  { methods: ["GET", "POST"], path: /^\/api\/bots\/[\w-]+\/computer\/control$/ },
+  { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/computer\/(?:join|screenshot|viewer-close)$/ },
+  { methods: ["GET"], path: /^\/api\/desktop-viewer\/vps\/[\w-]+(?:\/websockify)?$/ },
   // a bot's API: anyone who sees the bot reads whether it is on; the handler lets only someone who can edit the bot change it
   { methods: ["GET", "POST"], path: /^\/api\/bots\/[\w-]+\/bot-api$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/bot-api\/new-key$/ },
@@ -630,6 +639,9 @@ export function resolveRequestAuth(req: IncomingMessage, options: ResolveOptions
     const desktopOwner = options.loopbackMutationToken !== undefined &&
       secureTokenMatch(headerValue(req.headers[DESKTOP_OWNER_HEADER]), options.loopbackMutationToken) && fromOwnPage(req);
     if (fromBrowser(req) && !desktopOwner && !options.trustLocalBrowser) return deny(401, BROWSER_SIGN_IN);
+    // HSP patch: with OMB_RELAY_TOKEN_FILE set, only the holder of the relay token may send or follow a guarded request.
+    const relayRefused = relayTokenRefusal(method, path, headerValue(req.headers[RELAY_TOKEN_HEADER]));
+    if (relayRefused) return deny(403, relayRefused);
     if (options.loopbackMutationToken !== undefined && mutatingPublicRoute(method, path) && !desktopOwner) {
       return deny(403, "forbidden: this change must come from the desktop app or a paired device");
     }

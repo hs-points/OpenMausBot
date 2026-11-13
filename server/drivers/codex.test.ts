@@ -228,6 +228,27 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(sent).not.toContain("turn/start");
   });
 
+  it("fails a turn visibly before prompting when its mounted computer tools fail startup", async () => {
+    const dump = join(scratch, "computer-startup-failed.json");
+    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_MCP_FAILED: "computer", FAKE_CODEX_DUMP: dump } });
+    await instance.adapter.sendTurn({ threadId: "computer-startup", text: "Take a screenshot", integrations: {
+      localComputer: { command: process.execPath, args: [], env: {}, platform: "linux" },
+    } });
+    const completed = await recorder.until((event) => event.type === "turn.completed");
+    expect(completed).toMatchObject({ ok: false, stopReason: "computer_unavailable" });
+    expect(recorder.events.filter((event) => event.type === "runtime.error")).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("computer's screen tools did not connect") }),
+    ]);
+    expect(JSON.parse(readFileSync(dump, "utf8")).calls.some((call: { method: string }) => call.method === "turn/start")).toBe(false);
+  });
+
+  it("ignores an unmounted computer startup failure", async () => {
+    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_MCP_FAILED: "computer" } });
+    await instance.adapter.sendTurn({ threadId: "unmounted-computer", text: "Fixture" });
+    expect(await recorder.until((event) => event.type === "turn.completed")).toMatchObject({ ok: true });
+    expect(recorder.events.filter((event) => event.type === "runtime.error")).toEqual([]);
+  });
+
   it("says which tool calls codex refused as unsupported this turn, and not the ones from earlier turns", async () => {
     const rollout = join(scratch, "rollout.jsonl");
     // An earlier turn's refusal is already in the rollout: it was reported then.

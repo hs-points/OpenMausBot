@@ -24,6 +24,7 @@ let desktopPort: number;
 let admin: ReturnType<SessionRegistry["issue"]>;
 let member: ReturnType<SessionRegistry["issue"]>;
 let vpsTarget: DesktopTarget | undefined;
+let memberEdits = false;
 let inspected: string[];
 let seenHeaders: IncomingHttpHeaders;
 let seenPath: string | undefined;
@@ -82,7 +83,7 @@ beforeEach(async () => {
   admin = sessions.issue({ label: "Mac", scopes: ["admin", "client"] });
   member = sessions.issue({ label: "Member", scopes: ["client"] });
   inspected = []; touched = []; statusOverrides = {}; inspection = undefined; seenPath = undefined;
-  vpsTarget = undefined;
+  vpsTarget = undefined; memberEdits = false;
   targetLookups = 0; handled = () => {};
   leases = new Set();
   targets = [SHARED_LOCAL_VM_TARGET, perBotLocalVmTarget("test-bot"), poolLocalVmTarget(1)];
@@ -115,6 +116,7 @@ beforeEach(async () => {
       });
     },
     live: auth => auth.kind === "loopback" || sessions.isLive(auth.session.id),
+    mayView: (auth, id) => memberEdits && id === "vps/test-bot" && auth.kind === "session" && auth.session.id === member.session.id,
     lease: (id, botId, lease, threadId) => {
       if (!leases.has(leaseKey(id, botId, lease)) || (threadId !== undefined && threadId !== "th-1")) return;
       // Settled at open; afterwards only the lease is asked about.
@@ -330,6 +332,20 @@ it("uses the same authenticated proxy for VPS and releases only its own connecti
   sessions.revoke(admin.session.id);
   await closed;
   expect(holds).toBe(0);
+});
+
+it("shows a VPS screen to a member who can edit its bot, and nothing else", async () => {
+  vpsTarget = { key: "vps/test-bot", resolve: async () => ({ port: desktopPort, password: "fixture-secret", retain: () => () => {} }) };
+  const path = "/api/desktop-viewer/vps/test-bot";
+  const asMember = { cookie: `test_session=${member.token}` };
+  expect((await get(path, asMember)).status).toBe(403);
+  expect((await open(`${path}/websockify`, asMember)).status).toBe(403);
+  memberEdits = true;
+  expect((await get(path, asMember)).body).toEqual({ password: "fixture-secret" });
+  expect((await open(`${path}/websockify`, asMember)).status).toBe(101);
+  const shared = `/api/desktop-viewer/${viewerTargetId(targets[0])}`;
+  expect((await get(shared, asMember)).status).toBe(403);
+  expect((await open(`${shared}/websockify`, asMember)).status).toBe(403);
 });
 
 const lease = "phone-lease-0123456789";

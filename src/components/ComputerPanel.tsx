@@ -32,7 +32,8 @@ const loadLiveDesktop = () => import("./LiveDesktop").then((module) => ({ defaul
 const LiveDesktop = lazy(loadLiveDesktop);
 import { browserAvailable, browserUnavailableReason, builtInBrowserEnabled } from "@/lib/feature-flags";
 import { parseComputerHelp, transitionComputerControlLease, type ComputerControlAction } from "@/lib/computer-control";
-import { openProviderDesktop, useComputerTakeover } from "./computer-takeover";
+import { openProviderDesktop, takeDesktop, useComputerTakeover } from "./computer-takeover";
+import { useTeachOnComputer } from "./teach-on-computer-action";
 import { SignInBanner } from "./SignInRequestCard";
 import { FullScreenButton } from "./FullScreenButton";
 import { LocalScreenPreview } from "./LocalScreenPreview";
@@ -364,7 +365,8 @@ export function ComputerPanel({
     selectedInstance?.snapshot.state === "available" &&
       selectedInstance.capabilities?.computerMcp,
   );
-  const cloudSupported = canWorkOnCloud(cloudEngineOf(selectedInstance));
+  // A member never sees the engine list (it is admin-only): an engine this view cannot see is left for the server to judge.
+  const cloudSupported = (!selectedInstance && state.instances.length === 0) || canWorkOnCloud(cloudEngineOf(selectedInstance));
   const botRoutines = state.routines
     .filter((routine) => routine.botId === bot.id)
     .sort((a, b) => Number(b.enabled) - Number(a.enabled) || (a.nextRunAt ?? Infinity) - (b.nextRunAt ?? Infinity));
@@ -651,6 +653,7 @@ export function ComputerPanel({
     viewerClose: liveTarget?.startsWith("vps/") ? threadPath("computer/viewer-close") : null,
   });
   const liveHere = takeover.here && Boolean(liveTarget);
+  const teach = useTeachOnComputer({ bot, takeover, live: Boolean(liveTarget), computer: phase === "vm" ? "vm" : cloudPreviewReady && cloudBackend === "vps" ? "vps" : null, busy: pending === "join" || (!control.held && controlPending), setPending: setControlPending, setError, handBack: () => void handBack(), showComputer: () => selectPanelView("computer") });
   useEffect(() => { if (liveTarget) void loadLiveDesktop(); }, [liveTarget]);
 
   const pageVisible = usePageVisible();
@@ -888,16 +891,7 @@ export function ComputerPanel({
   const takeBlocked = pending === "join" || (phase === "vm" && !liveTarget);
   const takeControl = async (expand = false) => {
     if (!liveTarget) return cloudPreviewReady ? openDesktop() : undefined;
-    if (takeover.here) return takeover.setExpanded(expand || takeover.expanded);
-    setControlPending(true);
-    setError(null);
-    try {
-      await takeover.take(expand);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause : String(cause));
-    } finally {
-      setControlPending(false);
-    }
+    await takeDesktop(takeover, expand, setControlPending, setError);
   };
 
   const handBack = async () => {
@@ -1318,7 +1312,7 @@ export function ComputerPanel({
               <LiveDesktop
                 target={liveTarget} threadId={bot.threadId} name={bot.name} poster={frameSrc}
                 expanded={takeover.expanded} onExpandedChange={takeover.setExpanded}
-                onHandBack={() => void handBack()} handingBack={takeover.handingBack}
+                onHandBack={() => void handBack()} handingBack={takeover.handingBack} teach={teach.session}
                 onUnreachable={() => { takeover.leave(); setError(new LocalizedPanelError("computer.err.openDesktop")); }}
               />
             </Suspense>
@@ -1581,6 +1575,7 @@ export function ComputerPanel({
             {t(control.held ? "computer.fullScreen" : "computer.takeControl")}
           </button>
         )}
+        {advanced && teach.button("mt-2 flex w-full")}
         {advanced && canManageVm && phase === "vm" && vmStatus?.mode === "per-bot" && (
           <button
             onClick={() => void runVmAction("vm-delete")}
@@ -1610,6 +1605,7 @@ export function ComputerPanel({
               held={control.held} frame={frameSrc} name={bot.name} onTakeControl={(expand) => void takeControl(expand)}
               disabled={control.held && takeBlocked} takeDisabled={controlPending || takeBlocked} error={errorText}
             />
+            {teach.button("flex flex-auto")}
             {cloudPreviewReady && canManageCloud && (cloudBackend === "vps" || boatState !== "archived") && (
               <button
                 type="button"
