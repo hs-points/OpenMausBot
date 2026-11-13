@@ -54,10 +54,11 @@ describe("via call label", () => {
     expect(markup).not.toContain("via call");
   });
 
-  it("draws a finished call's row as its record, and keeps the spoken request inline", () => {
+  it("draws a finished call's record without repeating its spoken request or answer", () => {
     const markup = renderToStaticMarkup(createElement(ChatView, {
       bot: bot([
         message("m1", "spoken words", { via: "call", callId: "c1" }),
+        message("b1", "spoken answer", { role: "bot", requestMessageId: "m1" }),
         message("r1", "Call with Pepper · 0:42", {
           role: "bot",
           kind: "call",
@@ -67,8 +68,9 @@ describe("via call label", () => {
     }));
     expect(markup).toContain('data-testid="call-record"');
     expect(markup).toContain("Call with Pepper");
-    expect(markup).toContain("spoken words");
-    expect(markup.match(/>via call</g)).toHaveLength(1);
+    expect(markup).not.toContain("spoken words");
+    expect(markup).not.toContain("spoken answer");
+    expect(markup).not.toContain("via call");
     expect(markup).not.toContain("Call with Pepper · 0:42");
   });
 });
@@ -100,7 +102,7 @@ describe("a call's record at the end of a chat that is still working", () => {
     noteTurnEvent({ eventId: "end", provider: "claudeAgent", threadId: "t1", createdAt: "2026-10-23T12:00:00.000Z", turnId: "u1", type: "turn.completed", ok: true });
     const markup = drawWorking(settled);
     resetTurnLive();
-    expect(markup).toContain("All tests pass.");
+    expect(markup).not.toContain("All tests pass.");
     expect(markup).not.toContain("thinking-shimmer");
   });
 

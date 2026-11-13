@@ -56,8 +56,19 @@ then wins; neither key appears in the config or the log.
 ## User path
 
 Start a Live call from the call button's menu, say something the bot must act
-on, and hang up. The chat keeps what you said (labelled "via call"), the bot's
-steps and answer, and below them one small record of the call.
+on, and hang up. The chat shows one small record of the call instead of
+repeating its spoken requests and text answers. Open the record to read the
+conversation, including answers that arrive after hang-up. Typed messages,
+attachments, tool steps and approvals remain accessible in the chat. A call
+without a saved record keeps its text in the chat.
+
+The component check opens and closes the record, reads its conversation,
+and verifies that a late answer appears in the open record without appearing
+in the chat. It also checks that a typed message stays outside the record.
+
+```sh
+pnpm exec vitest run src/components/ChatView.call-sheet.test.ts src/components/ChatView.via-call.test.ts src/lib/call-record.test.ts
+```
 
 ## Drive and evidence
 

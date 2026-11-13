@@ -1,6 +1,18 @@
 import type { Message } from "@/state/store";
 import { isToolStep } from "@/lib/activity-runs";
 
+export function withoutRecordedCallText(transcript: readonly Message[]): Message[] {
+  const recordedCalls = new Set(transcript.flatMap((message) =>
+    message.kind === "call" && message.call ? [message.call.callId] : []));
+  const requests = new Set(transcript.filter((message) =>
+    message.role === "user" && message.callId && recordedCalls.has(message.callId)).map((message) => message.id));
+  return transcript.filter((message) => {
+    if (message.kind !== "text" || message.attachments?.length) return true;
+    if (requests.has(message.id)) return false;
+    return message.role !== "bot" || !message.requestMessageId || !requests.has(message.requestMessageId);
+  });
+}
+
 export type CallRecordLine =
   | { kind: "step"; id: string; tool: NonNullable<Message["tool"]> }
   | { kind: "approval"; id: string; card: NonNullable<Message["card"]> };

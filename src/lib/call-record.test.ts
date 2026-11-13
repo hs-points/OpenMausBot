@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Message } from "@/state/store";
-import { callConversation, callRecordIsPartial, callRecordLines } from "./call-record";
+import { callConversation, callRecordIsPartial, callRecordLines, withoutRecordedCallText } from "./call-record";
 
 let at = 0;
 const msg = (id: string, fields: Partial<Message>): Message => ({ id, role: "bot", kind: "text", at: ++at, ...fields }) as Message;
@@ -24,6 +24,36 @@ const callRow = (id: string, callId: string) => msg(id, {
   call: { callId, botId: "b", client: "ios", startedAt: 0, endedAt: 42_000, seconds: 42, endReason: "hung-up" },
 });
 const ids = (transcript: Message[], callId: string) => callRecordLines(transcript, callId).map((line) => `${line.kind}:${line.id}`);
+
+describe("withoutRecordedCallText", () => {
+  it("folds only a recorded call's text, including answers arriving after hang-up", () => {
+    const transcript = [
+      spoken("m1", "first call", "c1"),
+      msg("b1", { text: "First answer", requestMessageId: "m1" }),
+      callRow("r1", "c1"),
+      msg("b2", { text: "Late answer", requestMessageId: "m1" }),
+      msg("t1", { role: "user", text: "Typed during the call" }),
+      msg("tb1", { text: "Typed answer", requestMessageId: "t1" }),
+      spoken("m2", "call without a record", "c2"),
+      msg("b3", { text: "Second answer", requestMessageId: "m2" }),
+      spoken("legacy", "old call without an id", ""),
+      step("s1", "m1", "Read"),
+      approval("a1", "m1"),
+    ];
+    expect(withoutRecordedCallText(transcript).map((message) => message.id))
+      .toEqual(["r1", "t1", "tb1", "m2", "b3", "legacy", "s1", "a1"]);
+    expect(callConversation(transcript, "c1").map((entry) => entry.id))
+      .toEqual(["m1", "b1", "b2", "s1", "a1"]);
+    expect(transcript).toHaveLength(11);
+  });
+
+  it("keeps attachments accessible in the chat", () => {
+    const transcript = [spoken("m1", "make an image", "c1"), callRow("r1", "c1"),
+      msg("b1", { text: "Your image", requestMessageId: "m1", attachments: [{ kind: "image", name: "image.png", mime: "image/png", path: "/api/attachments/image.png" }] }),
+    ];
+    expect(withoutRecordedCallText(transcript).map((message) => message.id)).toEqual(["r1", "b1"]);
+  });
+});
 
 describe("callRecordLines", () => {
   it("lists the steps and approvals of the turns a call's spoken requests started, in order", () => {
