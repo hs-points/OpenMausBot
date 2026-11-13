@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 
 import type { TurnImageInput } from "../contracts.ts";
 
+export type { TurnImageInput };
 export type CodexImageInput = { type: "image"; url: string };
 
 export async function codexImageInputs(images: readonly TurnImageInput[] | undefined): Promise<CodexImageInput[]> {
@@ -13,6 +14,11 @@ export async function codexImageInputs(images: readonly TurnImageInput[] | undef
     type: "image" as const,
     url: `data:${image.mime};base64,${(await readFile(image.path)).toString("base64")}`,
   })));
+}
+
+/** codex-cli 0.160.1: turn/steer takes the same UserInput items as turn/start. A picture that cannot be read rejects, so nothing is steered. */
+export async function codexSteerInputs(text: string, images: readonly TurnImageInput[] | undefined): Promise<Array<{ type: "text"; text: string } | CodexImageInput>> {
+  return [{ type: "text", text }, ...await codexImageInputs(images)];
 }
 
 const INLINE_IMAGE = /^data:image\/[\w.+-]+;base64,/;

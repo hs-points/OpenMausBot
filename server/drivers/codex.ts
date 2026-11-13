@@ -40,7 +40,6 @@ import type {
   StdioMcpSpec,
   SteerOutcome,
   TextGenerationOptions,
-  TurnImageInput,
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
 import { codexSelectedProviderArgs, decodeCodexSelection, OFFICIAL_CODEX_PROVIDER, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
@@ -61,7 +60,7 @@ import { archivedNativeCodexThread, CODEX_MISSING_CREDENTIALS, codexProviderMism
 import { codexLoginCheck, readCodexLogin, storedCodexLogin } from "./codex-login.ts";
 import { keyRejected, noteKeyAccepted, noteKeyRejected } from "../key-rejections.ts";
 import { classifyResumeFailure, mayReplay, rebuiltSessionNotice, recoveryPromptFor } from "../resume-recovery.ts";
-import { extractMcpImages } from "../mcp-tool-images.ts"; import { codexImageInputs, withoutInlineImages } from "./codex-images.ts";
+import { extractMcpImages } from "../mcp-tool-images.ts"; import { codexImageInputs, codexSteerInputs, withoutInlineImages, type TurnImageInput } from "./codex-images.ts";
 import { parseProtocolAskQuestions, questionChoices } from "../../shared/ask-question.ts";
 import { codexQuestionReply, openAsyncQuestion, type CodexAsk } from "./codex-questions.ts";
 import { codexReleaseUpdate, codexUpdateCommand } from "./codex-update.ts"; export { codexUpdateCommand };
@@ -814,11 +813,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (child.exitCode !== null || child.signalCode !== null) return "refused";
         try {
           const steerTimeoutMs = Math.max(1, Number(process.env.FAKE_CODEX_STEER_TIMEOUT_MS ?? 10_000) || 10_000);
-          // turn/steer takes the same UserInput items as turn/start; an image that cannot be read refuses the whole steer.
-          const input = [{ type: "text" as const, text }, ...await codexImageInputs(images)];
           await request("turn/steer", {
             threadId: codexThreadId,
-            input,
+            input: await codexSteerInputs(text, images),
             expectedTurnId: codexTurnId,
           }, steerTimeoutMs);
           return "steered";
