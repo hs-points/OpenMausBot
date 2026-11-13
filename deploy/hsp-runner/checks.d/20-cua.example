@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Example server check for Ada's computer-use checks: version, status,
+# health_report and get_desktop_state. Copy to
+# /etc/omb-hsp-deploy/checks.d/20-cua (owner root, mode 0755) and replace the
+# commands with the ones you run by hand today. Each must exit non-zero on
+# failure. Environment: SERVICE, HSP_DIR, HSP_FOLDER, EXPECTED_VERSION, PORT.
+set -euo pipefail
+for tool in version status health_report get_desktop_state; do
+  echo "cua $tool"
+  REPLACE_WITH_YOUR_CUA_CHECK_COMMAND "$tool"
+done

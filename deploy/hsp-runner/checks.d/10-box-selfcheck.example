@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Example server check. Copy to /etc/omb-hsp-deploy/checks.d/10-box-selfcheck
+# (owner root, mode 0755), drop the .example suffix, and replace the command
+# with the box self-check you run by hand today. Exit 0 = pass.
+# Environment: SERVICE, HSP_DIR, HSP_FOLDER, EXPECTED_VERSION, PORT.
+set -euo pipefail
+out=$(REPLACE_WITH_YOUR_BOX_SELFCHECK_COMMAND 2>&1)
+echo "$out"
+echo "$out" | grep -Eq '\b33/33\b'
