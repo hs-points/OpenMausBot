@@ -1,9 +1,40 @@
 #!/usr/bin/env bash
-# Example server check. Copy to /etc/omb-hsp-deploy/checks.d/10-box-selfcheck
-# (owner root, mode 0755), drop the .example suffix, and replace the command
-# with the box self-check you run by hand today. Exit 0 = pass.
+# Box self-check for the new folder. Copy to /etc/omb-hsp-deploy/checks.d/10-box-selfcheck
+# (owner root, mode 0755) and drop the .example suffix. Exit 0 = pass.
 # Environment: SERVICE, HSP_DIR, HSP_FOLDER, EXPECTED_VERSION, PORT.
+#
+# Runs the package's own box self-check (dist-server/bot-box/box-check.js, the check
+# /opt/hsp-openmausbot/hsp-preflight.mjs runs before every start) as omb-hsp, the
+# service user, in a throwaway root so the live data dir is not touched. It prints
+# one JSON line {box, passed, total, failed, ...} and exits non-zero on any failure.
+# Passes only when every check passes (N/N) and there are at least BOX_CHECKS_MIN
+# checks (33 on 0.1.154), so a release that silently drops checks is caught.
 set -euo pipefail
-out=$(REPLACE_WITH_YOUR_BOX_SELFCHECK_COMMAND 2>&1)
-echo "$out"
-echo "$out" | grep -Eq '\b33/33\b'
+PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+NODE=/usr/local/bin/node
+MIN=${BOX_CHECKS_MIN:-33}
+SCRIPT="$HSP_DIR/node_modules/openmausbot/dist-server/bot-box/box-check.js"
+[ -f "$SCRIPT" ] || { echo "box self-check: $SCRIPT missing"; exit 1; }
+
+# Keep the path short: the check puts unix sockets under it (108-byte limit).
+root=$(mktemp -d /tmp/omb-boxcheck.XXXXXX)
+trap 'rm -rf "$root"' EXIT
+chown omb-hsp:omb-hsp "$root"
+chmod 0700 "$root"
+
+rc=0
+out=$(cd "$root" && timeout 300 runuser -u omb-hsp -- env -i HOME="$root" PATH="$PATH" OMB_BOT_BOX=1 \
+  "$NODE" "$SCRIPT" "--root=$root/box" 2>&1) || rc=$?
+echo "$out" | tail -c 2000
+[ "$rc" -eq 0 ] || { echo "box self-check: exit $rc"; exit 1; }
+
+summary=$(printf '%s\n' "$out" | "$NODE" -e '
+  const lines = require("fs").readFileSync(0, "utf8").trim().split("\n");
+  const r = JSON.parse(lines[lines.length - 1]);
+  const ok = !r.error && Array.isArray(r.failed) && r.failed.length === 0 && r.total > 0 && r.passed === r.total;
+  console.log(`${r.passed}/${r.total} ${ok ? "ok" : "FAIL"}${r.failed?.length ? " failed: " + r.failed.join(",") : ""}${r.error ? " error: " + r.error : ""}`);
+  process.exit(ok ? 0 : 1);
+') || { echo "box self-check: $summary"; exit 1; }
+echo "box self-check: $summary"
+total=${summary#*/}; total=${total%% *}
+[ "$total" -ge "$MIN" ] || { echo "box self-check: only $total checks, expected at least $MIN"; exit 1; }
