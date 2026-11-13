@@ -266,6 +266,12 @@ export interface ConnectorToolGrant {
   tools: "*" | string[];
 }
 
+/** The connected account a bot uses for one app. `exclusive` keeps every other bot off that account. */
+export interface ConnectorAccountPin {
+  account: string;
+  exclusive?: true;
+}
+
 /** Lowercased Composio service slug, e.g. `gmail`. */
 export const CONNECTOR_SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,80}$/;
 /** Composio tool names are upper-snake, e.g. `GMAIL_SEND_EMAIL`. */
@@ -379,6 +385,9 @@ export interface WireBot extends DefaultBotFields, BotAccessFields {
    * none. Grants never travel in shareable exports. */
   connectorTools?: Record<string, ConnectorToolGrant>;
   connectorScopes?: { apps: Record<string, "read" | "write"> };
+  /** The connected account this bot uses, by service slug. An app without an entry uses any account no other bot keeps
+   * to itself. Account IDs belong to this installation and never travel in exports. */
+  connectorAccounts?: Record<string, ConnectorAccountPin>;
   outbound?: { policy: "ask" | "allow" };
   /** Which of a paired phone's apps this bot may use; absent: every bot may use what the phone allows (shared/phone-apps.ts). */
   phoneApps?: import("./phone-apps.ts").PhoneApps;

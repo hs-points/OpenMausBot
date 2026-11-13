@@ -80,6 +80,23 @@ describe("AppTriggerManager", () => {
     expect(instance?.trigger_config).toEqual({ query: "from:acme.com subject:(order)" });
   });
 
+  it("watches only the account a bot is assigned, and never one another bot keeps to itself", async () => {
+    const other = broker.account(owner.userId, "gmail", "support");
+    connected.gmail!.accounts.push({ id: other, alias: "support", status: "ACTIVE" });
+    const assigned = manager({ accountChoice: () => ({ only: other }) });
+    const trigger = await assigned.create({ botId: "bot-1", name: "Order replies", prompt: "Reply.", app: "gmail", event: "GMAIL_NEW_GMAIL_MESSAGE", account: "sales" });
+    expect(trigger, "the assigned account, whatever was asked for").toMatchObject({ accountId: other, accountLabel: "support" });
+    await expect(manager({ accountChoice: () => ({ only: "ca_gone" }) }).create({ botId: "bot-1", name: "Gone", prompt: "Reply.", app: "gmail", event: "GMAIL_NEW_GMAIL_MESSAGE" }))
+      .rejects.toThrow(/assigned to this bot is not connected/);
+    const kept = manager({ accountChoice: (botId, app) => (botId === "bot-2" && app === "gmail" ? { except: [other] } : null) });
+    await expect(kept.create({ botId: "bot-2", name: "Theirs", prompt: "Reply.", app: "gmail", event: "GMAIL_NEW_GMAIL_MESSAGE", account: "support" }))
+      .rejects.toThrow(/No connected Gmail account is called support\. The accounts are: sales\./);
+    expect(await kept.create({ botId: "bot-2", name: "Open", prompt: "Read.", app: "gmail", event: "GMAIL_NEW_GMAIL_MESSAGE" }), "the one account left needs no naming")
+      .toMatchObject({ accountId: gmail });
+    await expect(manager({ accountChoice: () => ({ except: [gmail, other] }) }).create({ botId: "bot-3", name: "None", prompt: "Reply.", app: "gmail", event: "GMAIL_NEW_GMAIL_MESSAGE" }))
+      .rejects.toThrow(/has no Gmail account/);
+  });
+
   it("acks an event only after its run is saved: a failure before the save brings the same event back once", async () => {
     const triggers = manager();
     const trigger = await gmailTrigger(triggers);

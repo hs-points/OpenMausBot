@@ -15,6 +15,8 @@ describe("the connected apps a bot a Chief creates starts with", () => {
     expect(appsFromCreator(chief, { createdBy: ADA, visibility: { people: [ADA] } })).toEqual(grants(chief));
     expect(appsFromCreator({ connectorScopes: { apps: { slack: "read" } } }, {})).toEqual({ connectorScopes: { apps: { slack: "read" } } });
     expect(appsFromCreator({}, {}), "a Chief on every app makes a bot on every app").toEqual({});
+    expect(appsFromCreator({ connectorAccounts: { github: { account: "ca_chief", exclusive: true } } }, {}), "and on the Chief's account, never another")
+      .toEqual({ connectorAccounts: { github: { account: "ca_chief", exclusive: true } } });
   });
 
   it("go only to a bot with the Chief's owner", () => {

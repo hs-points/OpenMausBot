@@ -57,6 +57,8 @@ export interface AppTriggerManagerOptions {
   /** Whether app events can work here at all, and why not. Checked on every loop, since access arrives late. */
   service: () => { available: true } | { available: false; reason: "self-hosted" | "unavailable" | "off" };
   connectedApps: () => Promise<ConnectedApps>;
+  /** Per-bot accounts: the one account this bot must watch for the app, or the accounts kept for other bots. */
+  accountChoice?: (botId: string, app: string) => { only: string } | { except: readonly string[] } | null;
   botState: (botId: string) => "ready" | "busy" | "missing";
   runs: {
     enqueue(input: { webhookId: string; webhookName: string; prompt: string; botId: string; runOn: RoutineRunOn; deliveryId: string; receivedAt: number; eventSource: "app" }): { id: string };
@@ -267,7 +269,7 @@ export class AppTriggerManager {
     const type = await this.remote(() => this.options.broker.triggerType(input.event.trim()));
     if (!type) throw new AppTriggerError(`${input.event} is not an event OpenMausBot can watch. Call trigger_info action=events to see the events this app offers.`, 404);
     if (type.toolkit !== app) throw new AppTriggerError(`${type.slug} is a ${appLabel(type.toolkit)} event, not ${appLabel(app)}.`);
-    const account = await this.resolveAccount(app, input.account);
+    const account = await this.resolveAccount(app, input.account, input.botId);
     const filter = cleanFilter(input.filter);
     const config = triggerConfig(type, input.config ?? {}, filter);
     const duplicate = this.triggers.find((trigger) => trigger.enabled && trigger.botId === input.botId && trigger.event === type.slug &&
@@ -646,15 +648,24 @@ export class AppTriggerManager {
     trigger.skipped = { ...current, [reason]: current[reason] + 1 };
   }
 
-  private async resolveAccount(app: string, wanted: string | undefined): Promise<{ id: string; alias?: string }> {
+  private async resolveAccount(app: string, wanted: string | undefined, botId: string): Promise<{ id: string; alias?: string }> {
     let apps: ConnectedApps;
     try {
       apps = await this.options.connectedApps();
     } catch (error) {
       throw new AppTriggerError(`Connected apps could not be checked: ${error instanceof Error ? error.message : String(error)}`, 503);
     }
-    const accounts = (apps[app]?.accounts ?? []).filter((account) => active(account.status));
+    const connected = (apps[app]?.accounts ?? []).filter((account) => active(account.status));
     const label = appLabel(app);
+    const choice = this.options.accountChoice?.(botId, app) ?? null;
+    if (choice && "only" in choice) {
+      // The bot's assigned account, whatever was asked for.
+      const assigned = connected.find((account) => account.id === choice.only);
+      if (!assigned) throw new AppTriggerError(`The ${label} account assigned to this bot is not connected. Ask the person to reconnect it or to assign another account in this bot's Access settings.`, 409);
+      return assigned;
+    }
+    const accounts = choice ? connected.filter((account) => !choice.except.includes(account.id)) : connected;
+    if (connected.length && !accounts.length) throw new AppTriggerError(`This bot has no ${label} account: the connected ones are assigned to other bots. Ask the person to assign one in this bot's Access settings.`, 409);
     if (!accounts.length) throw new AppTriggerError(`${label} is not connected. Ask the person to connect ${label} first (COMPOSIO_MANAGE_CONNECTIONS shows them a card for it), then create the automation.`, 409);
     if (wanted?.trim()) {
       const key = wanted.trim().toLowerCase();

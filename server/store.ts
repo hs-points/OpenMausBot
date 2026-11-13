@@ -36,6 +36,7 @@ import type {
 } from "../shared/wire.ts";
 import { movesThreadToTop, nextOpenThread } from "../shared/wire.ts";
 import { parseConnectorTools } from "./connector-tools.ts";
+import { parseConnectorAccounts } from "./connector-accounts.ts";
 import { sameModelSelection } from "../shared/thread-model.ts";
 import { initialGreetingMessage } from "./initial-greeting.ts"; import { createDefaultBot, defaultBotRefusal, type DefaultBotIntro } from "./default-bot.ts";
 import { appsFromCreator } from "./inherited-apps.ts";
@@ -1499,6 +1500,11 @@ export class Store {
       const parsed = parseConnectorTools(patch.connectorTools);
       if (!parsed.ok) throw new Error(parsed.error);
       patch = { ...patch, connectorTools: parsed.grants };
+    }
+    if (patch.connectorAccounts !== undefined) {
+      const parsed = parseConnectorAccounts(patch.connectorAccounts);
+      if (!parsed.ok) throw new Error(parsed.error);
+      patch = { ...patch, connectorAccounts: parsed.accounts };
     }
     if (Object.hasOwn(patch, "toolScope")) {
       const parsed = parseToolScope(patch.toolScope);

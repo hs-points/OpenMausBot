@@ -29,6 +29,7 @@ import { memberBotPatchViolation, requestSource, type RequestAuth } from "../req
 import type { RoutineManager } from "../routines.ts";
 import type { SessionRegistry } from "../sessions.ts";
 import { parseConnectorTools } from "../connector-tools.ts";
+import { forgetAccountInventories, parseConnectorAccounts } from "../connector-accounts.ts";
 import { sectionKey, type BotRecord, type GroupRecord, type Store, type TaskRecord } from "../store.ts";
 import * as vps from "../vps-computer.ts";
 import { vpsSshAliasForBot } from "../vps-hosts.ts";
@@ -312,6 +313,21 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
           if (semantic) return json(res, 400, { error: semantic });
           patch.connectorTools = parsed.grants;
         }
+      }
+      // null or {} clears the assigned accounts. An account must be one connected for that app here.
+      if (body.connectorAccounts !== undefined) {
+        const parsed = parseConnectorAccounts(body.connectorAccounts);
+        if (!parsed.ok) return json(res, 400, { error: parsed.error });
+        if (parsed.accounts) {
+          // An unreachable backend never blocks the patch: a call with an account that is not connected is refused.
+          const services = await composio.connectedServices(cfg).catch(() => null);
+          const unknown = services && Object.entries(parsed.accounts).find(([slug, pin]) =>
+            !Object.hasOwn(services, slug) || !services[slug]!.accounts.some((account) => account.id === pin.account));
+          if (unknown) return json(res, 400, { error: `connectorAccounts.${unknown[0]} names an account that is not connected for that app` });
+        }
+        // Stored as an own key even when cleared, so the patch below removes the old assignments.
+        patch.connectorAccounts = parsed.accounts;
+        forgetAccountInventories();
       }
       if (body.parkDirectMessages !== undefined) {
         if (typeof body.parkDirectMessages !== "boolean") return json(res, 400, { error: "parkDirectMessages must be true or false" });

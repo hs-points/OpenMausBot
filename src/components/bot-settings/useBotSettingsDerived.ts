@@ -38,6 +38,7 @@ export type BotPatch = Partial<
     | "chiefOfStaff"
     | "managedSections"
     | "composio"
+    | "connectorAccounts"
     | "browser"
     | "recordBrowserSteps"
     | "mcpServers"

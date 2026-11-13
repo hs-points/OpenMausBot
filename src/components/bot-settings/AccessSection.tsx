@@ -24,6 +24,7 @@ import { ToolBudgetLine } from "./ToolBudgetLine";
 import { useCloudPlan } from "../ProIntroduction";
 import { xResearchAction } from "@/lib/cloud-plan";
 import { useBotApps } from "./useBotApps";
+import { ConnectorAccountsControl } from "./ConnectorAccounts";
 import {
   classifyConnectorTool,
   connectorServiceAccess,
@@ -767,6 +768,14 @@ export function AccessSection({
           <>
             {!draft && <ConnectorScopesControl connectedSlugs={connectedSlugs} labels={appLabels} scopes={bot.connectorScopes} onChange={(connectorScopes) => patch({ connectorScopes })} />}
             <ConnectorToolsGrants bot={bot} patch={patch} slugs={connectedSlugs} />
+            {!draft && <ConnectorAccountsControl
+              bot={bot} bots={state.bots} labels={appLabels}
+              onChange={(connectorAccounts) => patch({ connectorAccounts })}
+              onConnect={() => {
+                dispatch({ type: "toggleSettings", open: false });
+                dispatch({ type: "togglePlugins", open: true, surface: "apps" });
+              }}
+            />}
           </>
         )}
         {connectedAppsEnabled && connectedAppsConfigured && (

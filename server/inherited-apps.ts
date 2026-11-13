@@ -1,18 +1,20 @@
 import { botOwner, type OwnedBot } from "../shared/bot-owner.ts";
 import type { ConnectorScopes } from "../shared/connector-scopes.ts";
-import type { BotVisibility, ConnectorToolGrant } from "../shared/wire.ts";
+import type { BotVisibility, ConnectorAccountPin, ConnectorToolGrant } from "../shared/wire.ts";
 
 /** What a bot may use of the connected apps: the switch, each app's tools and read or write level, its MCP servers. */
 export interface AppGrants {
   composio?: boolean;
   connectorTools?: Record<string, ConnectorToolGrant>;
   connectorScopes?: ConnectorScopes;
+  /** The account each app runs as: copied too, so the created bot reaches no account its Chief could not. */
+  connectorAccounts?: Record<string, ConnectorAccountPin>;
   mcpServers?: string[];
 }
 
 type Placed = Pick<OwnedBot, "createdBy" | "reportsTo" | "defaultBot"> & { visibility?: BotVisibility };
 
-const GRANTS = ["composio", "connectorTools", "connectorScopes", "mcpServers"] as const;
+const GRANTS = ["composio", "connectorTools", "connectorScopes", "connectorAccounts", "mcpServers"] as const;
 const audience = (bot: Placed) => JSON.stringify(bot.visibility ?? "everyone");
 
 /** The connected apps a bot a Chief creates starts with: a copy of the Chief's own grants and levels, never more.

@@ -30,6 +30,7 @@ export interface AppTriggerHostDeps {
   connectionMode: () => "managed" | "self-hosted" | "unavailable";
   access: () => BrokerAccess | null;
   connectedApps: () => Promise<Connected>;
+  accountChoice?: (botId: string, app: string) => { only: string } | { except: readonly string[] } | null;
   routines: () => RoutineManager;
   webhooks: WebhookManager;
   /** Where webhook addresses start: this computer's receiver, or the workspace's public address. */
@@ -74,6 +75,7 @@ export function createAppTriggerHost(deps: AppTriggerHostDeps) {
     broker,
     service,
     connectedApps: deps.connectedApps,
+    accountChoice: deps.accountChoice,
     botState: deps.botState,
     runs: {
       enqueue: (input) => deps.routines().enqueueWebhook(input),

@@ -320,7 +320,7 @@ export interface Bot extends DefaultBotFields, Pick<WireBot, "mascotFaceColor" |
   createdBy?: string; reportsTo?: string;
   composio?: boolean;
   connectorTools?: Record<string, ConnectorToolGrant>;
-  connectorScopes?: { apps: Record<string, "read" | "write"> }; phoneApps?: import("../../shared/phone-apps").PhoneApps;
+  connectorScopes?: { apps: Record<string, "read" | "write"> }; connectorAccounts?: Record<string, import("../../shared/wire").ConnectorAccountPin>; phoneApps?: import("../../shared/phone-apps").PhoneApps;
   outbound?: { policy: "ask" | "allow" };
   fallback?: Array<{ instanceId: string; model: string }>;
   browser?: boolean;
