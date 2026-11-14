@@ -8,7 +8,7 @@ import { roleToolEnv } from "./chief-level.ts";
 /** The facts of a conversation that decide its agents tools. A settings change may change them; a turn never does. */
 export interface AgentsConversation {
   threadId: string;
-  bot: NonNullable<Parameters<typeof roleToolEnv>[0]> & { id: string; computer?: string; memoryEnabled?: boolean; xResearch?: boolean };
+  bot: NonNullable<Parameters<typeof roleToolEnv>[0]> & { id: string; computer?: string; cloudBackend?: string; memoryEnabled?: boolean; xResearch?: boolean };
   /** A room's thread: rooms refuse widgets, pages and a computer pick. */
   room: boolean;
   /** The bot works on its team's cloud computer, so it has no computer of its own to pick. */
@@ -45,6 +45,7 @@ export function agentsServerEnv(conversation: AgentsConversation, turn: AgentsTu
     OMB_MEMORY_ENABLED: flag(bot.memoryEnabled !== false),
     OMB_SHARED_COMPUTERS_ENABLED: flag(host.sharedComputers),
     OMB_CLOUD_HOME: flag(host.cloudHome), OMB_TEAM_PEOPLE: flag(host.team), OMB_ROOM: flag(conversation.room),
+    OMB_VPS_COMMANDS: flag(bot.cloudBackend === "vps" && bot.computer !== "off" && !conversation.teamComputer),
     OMB_VOICE_NOTES: flag(host.voiceNotes),
     OMB_X_RESEARCH: flag(host.x && bot.xResearch !== false),
     OMB_RESEARCH: flag(host.x && host.research && bot.xResearch !== false),

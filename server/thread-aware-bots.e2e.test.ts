@@ -497,6 +497,9 @@ describe("start_thread on another model, reporting back", () => {
       await expect.poll(() => handoffs().find((node) => node.id === requestId)?.status, { timeout: 15_000 }).toBe("completed");
       expect((await botState(pm.id)).tasks.filter((task: any) => task.title === "Review: wording")).toHaveLength(1);
 
+      const selfNew = await api("POST", "/api/internal/coordinate-bots", { botIds: [pm.id], message: "Open a job.", thread: "new" }, token);
+      expect([selfNew.status, selfNew.body.error]).toEqual([403, "To open a job on yourself, use start_thread with report_back: true."]);
+
       const notMine = await api("POST", "/api/internal/coordinate-bots", { botIds: [pm.id], message: "Do it again." }, token);
       expect([notMine.status, notMine.body.error]).toEqual([403, "Choose a teammate, not yourself"]);
       release(pm.threadId);
@@ -548,15 +551,15 @@ describe("start_thread on another model, reporting back", () => {
       const quiet = await api("POST", "/api/internal/threads", { title: "Quiet job", message: "Tidy up. [[gate:own-quiet]]" }, later);
       expect(quiet.status, JSON.stringify(quiet.body)).toBe(201);
       const notReporting = await api("POST", "/api/internal/coordinate-bots", { botIds: [pm.id], message: "Faster.", thread: quiet.body.threadId }, later);
-      expect([notReporting.status, notReporting.body.error]).toEqual([403, "Choose a teammate, not yourself"]);
+      expect([notReporting.status, notReporting.body.error]).toEqual([403, "You can only continue your own job from the conversation that opened it. Use list_threads to find it."]);
       // Only the conversation that opened it may steer it, and never through a room.
       const { task: other } = (await api("POST", `/api/bots/${pm.id}/tasks`, { title: "Other chat" })).body;
       const fromOther = await api("POST", "/api/internal/coordinate-bots", { botIds: [pm.id], message: "Faster.", thread: threadId }, await mintedToken(pm.id, other.threadId));
-      expect([fromOther.status, fromOther.body.error]).toEqual([403, "Choose a teammate, not yourself"]);
+      expect([fromOther.status, fromOther.body.error]).toEqual([403, "You can only continue your own job from the conversation that opened it. Use list_threads to find it."]);
       const { group } = (await api("POST", "/api/groups", { name: "Steer room", memberIds: [pm.id],
         setup: { bulletin: "", defaultResponder: { kind: "member", botId: pm.id } } })).body;
       const viaRoom = await api("POST", "/api/internal/coordinate-bots", { botIds: [pm.id], message: "Faster.", thread: threadId, groupId: group.id }, later);
-      expect([viaRoom.status, viaRoom.body.error]).toEqual([403, "Choose a teammate, not yourself"]);
+      expect([viaRoom.status, viaRoom.body.error]).toEqual([403, "You can only continue your own job from the conversation that opened it. Use list_threads to find it."]);
       release("own-quiet");
       release(pm.threadId);
       // The follow-up reports back too: its result lands in the opener's chat and the opener resumes with it.
