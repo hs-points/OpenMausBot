@@ -948,7 +948,7 @@ const CLOUD_HOME_SURFACE = {
 export function availableTools(profile: CatalogProfile) {
   const tools = catalogTools(profile);
   const placed = profile.cloudHome
-    ? tools.filter(tool => !LOCAL_VM_TOOL_NAMES.has(tool.name)).map(tool => tool.name === "select_computer"
+    ? tools.filter(tool => profile.vpsCommands === true || !LOCAL_VM_TOOL_NAMES.has(tool.name)).map(tool => tool.name === "select_computer"
       ? { ...tool, inputSchema: { ...tool.inputSchema, properties: { surface: CLOUD_HOME_SURFACE } } }
       : tool)
     : tools;

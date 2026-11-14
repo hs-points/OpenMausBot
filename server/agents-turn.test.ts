@@ -93,6 +93,32 @@ describe("one conversation's agents tools", () => {
   });
 });
 
+describe("cloud-home VPS commands", () => {
+  const cloud: AgentsConversation = { ...CHAT, host: { ...HOST, cloudHome: true }, bot: { ...CHAT.bot, cloudBackend: "vps", computer: "cloud" } };
+
+  it.each([false, true])("carries VPS commands into parent and child conversations (botDriven=%s)", async (botDriven) => {
+    for (const { env, wire } of await everyTurn({ ...cloud, botDriven })) {
+      expect(env.OMB_VPS_COMMANDS).toBe("1");
+      expect(JSON.parse(wire).tools.map((tool: { name: string }) => tool.name)).toContain("vm_exec");
+    }
+  });
+
+  it.each([
+    { bot: { ...cloud.bot, computer: "off" } },
+    { teamComputer: true },
+    { bot: { ...cloud.bot, cloudBackend: "box" } },
+  ])("hides cloud-home commands without the bot's own VPS: %j", async (change) => {
+    for (const { env, wire } of await everyTurn({ ...cloud, ...change })) {
+      expect(env.OMB_VPS_COMMANDS).toBe("0");
+      expect(JSON.parse(wire).tools.map((tool: { name: string }) => tool.name)).not.toContain("vm_exec");
+    }
+  });
+
+  it("keeps the non-cloud catalog unchanged with either VPS flag", async () => {
+    expect(await toolsList({ OMB_VPS_COMMANDS: "1" })).toBe(await toolsList({ OMB_VPS_COMMANDS: "0" }));
+  });
+});
+
 describe("what a turn that may not use a listed tool is told", () => {
   it("names what started a direct turn", () => {
     expect(directTurnKind({})).toBe("person");

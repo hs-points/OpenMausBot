@@ -13,6 +13,8 @@ export interface CatalogProfile {
    * on): research_search, research_endpoint and research_call are mounted too. Absent means off. */
   research?: boolean;
   cloudHome: boolean;
+  /** This bot has its own enabled VPS computer; vm_exec is available on a Cloud home. */
+  vpsCommands?: boolean;
   memoryEnabled?: boolean;
   /** The section's Chief of Staff; the server refuses Chief-only tools to every other bot. */
   chief: boolean;
@@ -43,6 +45,7 @@ export function catalogProfileFromEnv(env: NodeJS.ProcessEnv): CatalogProfile {
     xResearch: env.OMB_X_RESEARCH === "1",
     research: env.OMB_RESEARCH === "1",
     cloudHome: env.OMB_CLOUD_HOME === "1",
+    vpsCommands: env.OMB_VPS_COMMANDS === "1",
     memoryEnabled: env.OMB_MEMORY_ENABLED !== "0",
     chief: env.OMB_CHIEF_OF_STAFF === "1",
     botId: env.OMB_BOT_ID ?? "",

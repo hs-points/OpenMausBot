@@ -13753,7 +13753,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             // Echo only the id the caller sent, never a bot's name.
           const addressed = store.bot(target.botId);
           const eligibility =
-            target.botId === internalSender.id && !toSelf ? "Choose a teammate, not yourself"
+            target.botId === internalSender.id && !toSelf ? call.thread === "new"
+              ? "To open a job on yourself, use start_thread with report_back: true."
+              : call.thread && call.thread !== "standing"
+                ? "You can only continue your own job from the conversation that opened it. Use list_threads to find it."
+                : "Choose a teammate, not yourself"
             : !addressed ? `No bot with id "${target.botId}" — call list_bots and copy the exact id from the result`
             : addressed.hidden ? `The bot with id "${target.botId}" is no longer available — call list_bots for the ones you can reach`
             : roomHandoffProblem(target, address) ?? personalReach.handOnProblem(internalSender, addressed, address.threadId, internalCapability.generation);
