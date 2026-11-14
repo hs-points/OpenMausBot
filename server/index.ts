@@ -13310,7 +13310,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           if (!vm) {
             const vpsTarget = vpsExecTargets.get(threadId);
             if (!vpsTarget || vpsTarget.generation !== internalCapability.generation) return json(res, 409, { error: "You have no Local VM or cloud computer in this turn, so there is nowhere to run a command." });
-            const gate = await computerCallGate(internalCapability); if (gate.held) return json(res, 409, { error: controlRefusal(gate) }); requireActiveInternalCapability();
+            if (sharedVm.snapshot(internalSender.id, threadId).held) return json(res, 409, { error: controlRefusal({ reason: "person" }) });
+            requireActiveInternalCapability(); // HSP: a command never takes the screen, so the bot's other threads run theirs at the same time
             const result = await vpsContainerExec(vpsTarget.cfg, vpsTarget.botId, vpsTarget.container,
               typeof body.command === "string" ? body.command : "",
               { timeoutSeconds: typeof body.timeout_seconds === "number" ? body.timeout_seconds : undefined });

@@ -130,6 +130,7 @@ case "$*" in
       exit 1
     fi
     cat "$FAKE_DOCKER_DIR/image.json" ;;
+  *" exec "*" omb-exec "*) echo "vm-exec ran"; echo "__omb_exit__=0" >&2 ;;
   *" exec "*"--version"*) echo "cua-driver ${CUA_DRIVER_VERSION}" ;;
   *" exec "*"--screenshot-out-file"*)
     : > "$FAKE_DOCKER_DIR/capture-started"
@@ -700,6 +701,84 @@ createServer(socket => socket.end()).listen(port, '127.0.0.1');
         writeFileSync(gateFile, "open");
         await api("POST", `/api/bots/${bot.id}/interrupt`, { threadId: refill.threadId });
         await api("POST", `/api/bots/${bot.id}/interrupt`, { threadId: check.threadId });
+      }
+    },
+    60_000,
+  );
+
+  it(
+    "runs a parallel thread's vm_exec while another thread holds the VPS desktop, and refuses it only for a person or an ended turn",
+    async () => {
+      writeFileSync(dockerLog, "");
+      rmSync(gateFile, { force: true });
+      rmSync(`${acpDump}.mcp.json`, { force: true });
+      expect((await api("PUT", "/api/config", { vps: { sshAlias: "production-vps" } })).status).toBe(200);
+      const bot = (await api("POST", "/api/bots")).body.bot;
+      writeFileSync(join(dirname(dockerLog), "container.name"), vpsContainerName(bot.id));
+      await api("PATCH", `/api/bots/${bot.id}`, { name: "Shell operator", modelSelection: { instanceId: "vps", model: "fake-model" } });
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { cloudBackend: "vps" })).status).toBe(200);
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "cloud" })).status).toBe(200);
+      const mounted = () => {
+        const servers = JSON.parse(readFileSync(`${acpDump}.mcp.json`, "utf8")) as Array<{ name: string; env?: Array<{ name: string; value: string }> }>;
+        const env = (server: string, name: string) => servers.find((s) => s.name === server)?.env?.find((entry) => entry.name === name)?.value ?? "";
+        return { url: env("computer", "OMB_CONTROL_URL"), token: env("computer", "OMB_CONTROL_TOKEN"), agentsToken: env("agents", "OMB_COMMS_TOKEN") };
+      };
+      const screenGate = (mount: { url: string; token: string }) => createControlClient({ url: mount.url, token: mount.token }).state(true);
+      const vmExec = async (agentsToken: string) => {
+        const res = await fetch(`${BASE}/api/internal/vm-exec`, {
+          method: "POST", headers: { authorization: `Bearer ${agentsToken}`, "content-type": "application/json" },
+          body: JSON.stringify({ command: "uname -a" }),
+        });
+        return { status: res.status, body: await res.json() as any };
+      };
+      const activities = async (threadId: string) =>
+        ((await api("GET", `/api/threads/${threadId}/messages`)).body.messages as any[])
+          .filter((m) => m.kind === "activity").map((m) => String(m.tool?.name ?? ""));
+      const taskBusy = async (threadId: string) => Boolean((await botById(bot.id))?.tasks?.find((t: any) => t.threadId === threadId)?.busy);
+
+      const holder = (await api("POST", `/api/bots/${bot.id}/tasks`, { title: "Desktop work" })).body.task;
+      const shell = (await api("POST", `/api/bots/${bot.id}/tasks`, { title: "Shell work" })).body.task;
+      try {
+        expect((await api("POST", `/api/bots/${bot.id}/messages`, { threadId: holder.threadId, text: "Drive the VPS desktop" })).status).toBe(202);
+        await until(async () => existsSync(`${acpDump}.mcp.json`) && await taskBusy(holder.threadId), "the desktop turn");
+        const holderMount = mounted();
+        rmSync(`${acpDump}.mcp.json`, { force: true });
+        expect((await api("POST", `/api/bots/${bot.id}/messages`, { threadId: shell.threadId, text: "Run a shell command on the VPS" })).status).toBe(202);
+        await until(async () => existsSync(`${acpDump}.mcp.json`) && await taskBusy(shell.threadId), "the shell turn, while the desktop turn runs");
+        const shellMount = mounted();
+        expect(shellMount.agentsToken).not.toBe("");
+        expect(shellMount.agentsToken).not.toBe(holderMount.agentsToken);
+
+        expect(await screenGate(holderMount)).toEqual({ held: false, helpOpen: false });
+
+        const started = Date.now();
+        const ran = await vmExec(shellMount.agentsToken);
+        expect(ran.status, JSON.stringify(ran.body)).toBe(200);
+        expect(ran.body).toMatchObject({ exitCode: 0, stdout: expect.stringContaining("vm-exec ran"), timedOut: false });
+        expect(Date.now() - started).toBeLessThan(CALL_WAIT_MS);
+        expect(readFileSync(dockerLog, "utf8")).toMatch(/^-H ssh:\/\/production-vps exec .* omb-exec uname -a$/m);
+        expect((await activities(shell.threadId)).join("|")).not.toContain("Waiting for its turn");
+
+        const contended = await screenGate(shellMount);
+        expect(contended).toEqual({ held: true, helpOpen: false, blockedReason: CONTROL_BUSY });
+
+        expect((await api("POST", `/api/bots/${bot.id}/computer/control`, { action: "take" })).status).toBe(200);
+        try {
+          const refused = await vmExec(shellMount.agentsToken);
+          expect(refused).toEqual({ status: 409, body: { error: CONTROL_REFUSAL_PLAIN } });
+        } finally {
+          expect((await api("POST", `/api/bots/${bot.id}/computer/control`, { action: "release" })).status).toBe(200);
+        }
+        expect((await vmExec(shellMount.agentsToken)).status).toBe(200);
+
+        writeFileSync(gateFile, "open");
+        await until(async () => (await botById(bot.id))?.busy === false, "both turns settling");
+        const ended = await vmExec(shellMount.agentsToken);
+        expect(ended.status, JSON.stringify(ended.body)).toBe(401);
+      } finally {
+        writeFileSync(gateFile, "open");
+        await api("POST", `/api/bots/${bot.id}/interrupt`, { threadId: holder.threadId });
+        await api("POST", `/api/bots/${bot.id}/interrupt`, { threadId: shell.threadId });
       }
     },
     60_000,
